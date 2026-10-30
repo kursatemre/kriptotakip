@@ -457,4 +457,7 @@ class FakeBroker(Broker):
 def make_broker(cfg) -> Broker:
     if cfg.broker == "fake":
         return FakeBroker()
+    if cfg.broker == "mt4":
+        from .mt4 import MT4Broker
+        return MT4Broker(cfg.mt4.bridge_dir)
     return MT5Broker(cfg.mt5.login, cfg.mt5.password, cfg.mt5.server, cfg.mt5.path)

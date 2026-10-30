@@ -135,7 +135,8 @@ class Engine:
                 "(config.json içinde allow_live=false)."
             )
         if not acc.get("algo_trading_enabled", True):
-            raise BrokerError("MT5'te 'Algo Trading' butonu kapalı. Terminalde açın.")
+            raise BrokerError("MetaTrader'da otomatik işlem kapalı: 'AutoTrading/Algo Trading' butonunu açın "
+                              "(MT4'te ayrıca GcmBotBridge'de 'Canlı işlemlere izin ver' işaretli olmalı).")
 
     def apply_settings(self, trading: dict | None = None, risk: dict | None = None):
         """Ayarları doğrular, uygular ve kaydeder. Hatalıysa ValueError fırlatır."""

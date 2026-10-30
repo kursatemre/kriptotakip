@@ -1,13 +1,17 @@
-# GCM Bot – MetaTrader 5 Al-Sat Botu + Mobil Kontrol Uygulaması
+# GCM Bot – Forex Al-Sat Botu + Mobil Kontrol Uygulaması
 
-GCM Yatırım'ın **MetaTrader 5** hesabında (önce **demo**) otomatik al-sat yapan bir bot
+GCM Yatırım'ın **MetaTrader 4** forex hesabında (önce **demo**) otomatik al-sat yapan bir bot
 ve botu iPhone/Android'den yöneten bir uygulama. Eski KriptoTakip uygulamasının kripto
 fiyat takibi de bu uygulamanın **Kripto** sekmesine taşındı.
 
+> GCM forex işlemlerini MT4 ve GCM Trader'da sunar; MT5'i sadece VİOP/Opsiyon için sunar.
+> GCM Trader'ın bot arayüzü olmadığı için bot MT4'e, içinde çalışan **GcmBotBridge** uzman
+> danışmanı (köprü) üzerinden bağlanır. MT5 hesapları da desteklenir (`"broker": "mt5"`).
+
 ```
 ┌──────────── Windows bilgisayar ─────────────┐          ┌──── iPhone / Android ────┐
-│  MetaTrader 5 (GCM demo hesabı)              │          │  GCM Bot uygulaması       │
-│        ▲  resmi MetaTrader5 Python API       │  HTTP +  │  • Botu başlat/durdur     │
+│  MetaTrader 4 (GCM forex demo hesabı)        │          │  GCM Bot uygulaması       │
+│        ▲  GcmBotBridge EA (dosya köprüsü)    │  HTTP +  │  • Botu başlat/durdur     │
 │        │                                     │  token   │  • Hesap, pozisyonlar     │
 │  bot/  (Python)                              │◄────────►│  • Strateji & risk ayarı  │
 │   • stratejiler + risk yönetimi              │          │  • Backtest/karşılaştırma │
@@ -20,32 +24,35 @@ fiyat takibi de bu uygulamanın **Kripto** sekmesine taşındı.
 
 > **Neden bot telefonda çalışmıyor?** iOS, bir uygulamanın başka bir uygulamaya (GCM'nin
 > uygulamasına) dokunmasına ve arka planda sürekli çalışmasına izin vermez. Bu yüzden bot,
-> MT5 ile birlikte bilgisayarda 7/24 çalışır; telefon sadece kumanda görevi görür.
+> MT4 ile birlikte bilgisayarda 7/24 çalışır; telefon sadece kumanda görevi görür.
 
 ---
 
 ## 1. Bilgisayar (Windows) kurulumu
 
-1. **MetaTrader 5'i kurun.** GCM'nin sitesinden MT5'i indirin ve GCM'den bir **demo hesap** açın.
-   MT5'te bu demo hesapla giriş yapın.
-2. **Algo Trading'i açın.** MT5 üst menüdeki **Algo Trading** butonu yeşil olmalı.
-   Ayrıca *Araçlar → Seçenekler → Uzman Danışmanlar* altında "Algoritmik işleme izin ver"
-   seçeneğini işaretleyin.
-3. **Python 3.11+** kurun ([python.org](https://www.python.org/downloads/)). Kurarken
+1. **MetaTrader 4'ü kurun.** GCM'nin [MT4 sayfasından](https://www.gcmyatirim.com.tr/islem-platformlari/forex-islem-platformlari/mt4/gcm-meta-trader4)
+   indirin ve forex **demo hesabınızla** giriş yapın.
+2. **Köprüyü kurun.** `bot\mt4\GcmBotBridge.mq4` dosyasını MT4'te *Dosya → Veri Klasörünü Aç*
+   ile açılan klasördeki `MQL4\Experts` içine kopyalayın. MT4'te *Gezgin → Uzman Danışmanlar*'a
+   sağ tıklayıp **Yenile** deyin (MT4 dosyayı kendisi derler).
+3. **Köprüyü çalıştırın.** Üstteki **AutoTrading** butonunu yeşil yapın. GcmBotBridge'i herhangi
+   bir grafiğe sürükleyin, *Ortak* sekmesinde **"Canlı işlemlere izin ver"**i işaretleyin.
+   Grafiğin sağ üstünde gülen yüz 🙂 görünmeli. MT4 açık ve EA ekli kaldığı sürece bot çalışır.
+   MT4 *Hesap Geçmişi* sekmesine sağ tıklayıp **Tüm Geçmiş**'i seçin (uygulamadaki geçmiş buradan gelir).
+4. **Python 3.11+** kurun ([python.org](https://www.python.org/downloads/)). Kurarken
    "Add to PATH" kutusunu işaretleyin.
-4. Bu repoyu indirin ve `bot\start.bat` dosyasına çift tıklayın. İlk seferde Python ortamını
+5. Bu repoyu indirin ve `bot\start.bat` dosyasına çift tıklayın. İlk seferde Python ortamını
    (`bot\.venv`) kurar, `config.json` oluşturur ve botu başlatır. Sonraki seferlerde sadece başlatır.
-5. **Sembol adlarını kontrol edin.** GCM'de semboller `EURUSD` yerine `EURUSD.` gibi ekli
+6. **Sembol adlarını kontrol edin.** GCM'de semboller `EURUSD` yerine `EURUSD.` gibi ekli
    olabilir. Bot başlarken bulamadığı sembolleri benzer adlarıyla birlikte uyarı olarak yazar.
    Listeyi görmek için: `start.bat symbols EUR` veya `start.bat symbols XAU`.
-6. **`config.json`'u düzenleyin** (sonra botu kapatıp yeniden başlatın):
-   - `mt5.login`, `mt5.password`, `mt5.server`: demo hesap bilgileriniz. MT5'te zaten
-     giriş yaptıysanız `login` değerini `0` bırakın; bot açık terminali kullanır (önerilen,
-     şifre dosyaya yazılmaz).
-   - `trading.symbols`: 5. adımda bulduğunuz adlar.
+7. **`config.json`'u düzenleyin** (sonra botu kapatıp yeniden başlatın):
+   - `broker`: GCM forex için `"mt4"` (varsayılan). Bot MT4'te açık olan hesabı kullanır;
+     şifre hiçbir dosyaya yazılmaz. MT5 hesabı için `"mt5"` yapıp `mt5` bölümünü doldurun.
+   - `trading.symbols`: 6. adımda bulduğunuz adlar.
    - `api.token`: boş bırakın, ilk çalıştırmada otomatik üretilir.
    - `allow_live`: **false kalsın.** Bot bu ayarla gerçek hesapta işlem açmayı reddeder.
-7. Bot çalışırken konsolda telefona girmeniz gereken **sunucu adresi** ve **token** yazar.
+8. Bot çalışırken konsolda telefona girmeniz gereken **sunucu adresi** ve **token** yazar.
    Bot "durdurulmuş" halde başlar; işlemleri uygulamadan siz başlatırsınız.
 
 > Bilgisayarın uyku moduna geçmesini kapatın: *Ayarlar → Sistem → Güç → Uyku: Hiçbir zaman*.
@@ -196,6 +203,7 @@ bot/
   run.py                 giriş noktası (sunucu + backtest komutları)
   gcmbot/
     broker.py            MT5 bağlantısı + sahte broker
+    mt4.py               MT4 köprüsü (GcmBotBridge EA ile)
     strategies.py        stratejiler
     indicators.py        EMA, RSI, ATR, Bollinger
     risk.py              lot hesabı, SL/TP
@@ -203,6 +211,7 @@ bot/
     backtest.py          backtest, karşılaştırma, optimizasyon
     crypto.py            kripto fiyatları (CoinGecko)
     api.py               mobil uygulamanın REST API'si
+  mt4/GcmBotBridge.mq4   MT4 içinde çalışan köprü EA
   tests/
 mobile/                  Flutter uygulaması (iOS, Android, web)
   lib/screens/           Panel, Pozisyonlar, Strateji, Backtest, Kripto, Kayıtlar

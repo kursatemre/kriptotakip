@@ -20,6 +20,12 @@ class MT5Settings(BaseModel):
     path: str = ""
 
 
+class MT4Settings(BaseModel):
+    # GcmBotBridge EA'sı ile konuşulan klasör. Boşsa MT4'ün ortak klasörü kullanılır:
+    # %APPDATA%\MetaQuotes\Terminal\Common\Files\gcmbot
+    bridge_dir: str = ""
+
+
 class ApiSettings(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8000
@@ -81,10 +87,12 @@ class CryptoSettings(BaseModel):
 
 
 class Config(BaseModel):
-    broker: Literal["mt5", "fake"] = "mt5"
+    # mt4: GCM forex (GcmBotBridge EA'sı ile), mt5: MT5 hesapları, fake: deneme
+    broker: Literal["mt4", "mt5", "fake"] = "mt5"
     # GÜVENLİK: false iken bot gerçek (canlı) hesapta emir göndermeyi REDDEDER
     allow_live: bool = False
     mt5: MT5Settings = Field(default_factory=MT5Settings)
+    mt4: MT4Settings = Field(default_factory=MT4Settings)
     api: ApiSettings = Field(default_factory=ApiSettings)
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     trading: TradingSettings = Field(default_factory=TradingSettings)

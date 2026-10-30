@@ -75,7 +75,8 @@ def serve(args):
     if not acc["is_demo"] and not cfg.allow_live:
         print("UYARI: Bu hesap DEMO değil. allow_live=false olduğu için bot işlem AÇMAYACAK.")
     if not acc["algo_trading_enabled"]:
-        print("UYARI: MT5'te 'Algo Trading' kapalı. Açmadan bot işlem açamaz.")
+        print("UYARI: Otomatik işlem kapalı (AutoTrading butonu / EA'da 'Canlı işlemlere izin ver'). "
+              "Açmadan bot işlem açamaz.")
     check_symbols(broker, cfg.trading.symbols)
 
     engine = Engine(cfg, broker, on_config_change=lambda c: save_config(c, args.config),

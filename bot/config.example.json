@@ -1,6 +1,9 @@
 {
-  "broker": "mt5",
+  "broker": "mt4",
   "allow_live": false,
+  "mt4": {
+    "bridge_dir": ""
+  },
   "mt5": {
     "login": 0,
     "password": "",
