@@ -34,6 +34,9 @@ class BacktestIn(BaseModel):
     mode: str = "single"  # single | compare | optimize
     strategy: str = "ema_trend"
     params: dict = Field(default_factory=dict)
+    # Boşsa anlık spread kullanılır (hafta sonu/haber anında yanıltıcı olabilir)
+    spread: float | None = Field(None, ge=0)
+    commission: float = Field(0.0, ge=0)  # işlem başı maliyet, fiyat cinsinden
 
 
 def create_app(engine: Engine, web_dir: Path | None = None) -> FastAPI:
@@ -80,6 +83,10 @@ def create_app(engine: Engine, web_dir: Path | None = None) -> FastAPI:
 
     @app.post("/api/positions/{ticket}/close", dependencies=api)
     def close_position(ticket: int):
+        # Sadece botun açtığı pozisyonlar: MT5'te elle açılan işlemlere dokunulmaz
+        mine = {p.ticket for p in engine.broker.positions(engine.cfg.trading.magic)}
+        if ticket not in mine:
+            raise HTTPException(404, f"#{ticket} botun açtığı açık bir pozisyon değil")
         engine.broker.close_position(ticket)
         engine.event("info", f"#{ticket} uygulamadan elle kapatıldı", notify=True)
         return {"ok": True}
@@ -121,8 +128,11 @@ def create_app(engine: Engine, web_dir: Path | None = None) -> FastAPI:
         if body.strategy not in STRATEGIES:
             raise HTTPException(400, f"Bilinmeyen strateji: {body.strategy}")
         df = engine.broker.rates(body.symbol, tf, body.bars)
-        bid, ask = engine.broker.price(body.symbol)
-        s = BacktestSettings.from_config(engine.cfg, spread=max(ask - bid, 0))
+        spread = body.spread
+        if spread is None:
+            bid, ask = engine.broker.price(body.symbol)
+            spread = max(ask - bid, 0)
+        s = BacktestSettings.from_config(engine.cfg, spread=spread, commission=body.commission)
         if body.mode == "compare":
             return {"mode": "compare", "results": compare(df, s)}
         if body.mode == "optimize":

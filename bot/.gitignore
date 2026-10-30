@@ -1,5 +1,7 @@
 config.json
 config.tmp
+state.json
+state.tmp
 __pycache__/
 .pytest_cache/
 .venv/

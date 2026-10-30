@@ -125,6 +125,11 @@ TP 3×ATR). Lot, her işlemde sermayenin **%1'ini** riske edecek şekilde hesapl
 4. **Demoda en az 2-4 hafta izleyin.** Demo sonuçlarını backtest ile karşılaştırın, gerekirse
    strateji veya parametre değiştirin.
 
+Backtest spread'i hesaba katar, komisyonu katmaz. Hesabınızda komisyon varsa
+`--commission` ile işlem başı maliyeti fiyat cinsinden verin (ör. EURUSD'de lot başı 7$
+gidiş-dönüş = `0.00007`). Anlık spread yerine sabit bir değer için `--spread` kullanın. Max
+düşüş, açık pozisyonların bar içindeki en kötü fiyattaki zararını da içerir.
+
 Değerlendirirken şunlara bakın: **PF** (kâr faktörü) 1.3'ün üstünde olmalı, **max düşüş**
 kaldırabileceğiniz seviyede olmalı ve **işlem sayısı** en az 30-50 olmalı. Az işlemle alınan
 sonuçlar şans olabilir.
@@ -134,13 +139,24 @@ sonuçlar şans olabilir.
 
 ## 5. Güvenlik önlemleri
 
-- **Demo kilidi:** `allow_live: false` iken bot, hesap demo değilse başlamayı reddeder.
-- **Günlük zarar limiti:** Gün içinde varlık %3 (ayarlanabilir) düşerse bot o gün yeni işlem açmaz.
+- **Demo kilidi:** `allow_live: false` iken bot, hesap demo değilse başlamayı reddeder. Kontrol
+  her turda tekrarlanır: bot çalışırken MT5'te gerçek hesaba geçilirse bot kendini durdurur.
+- **Günlük zarar limiti:** Gün içinde (UTC) varlık %3 (ayarlanabilir) düşerse bot o gün yeni
+  işlem açmaz. Gün başı varlık `bot/state.json`'a yazılır, bot yeniden başlatılınca limit sıfırlanmaz.
 - **Maksimum açık pozisyon** sınırı vardır ve her sembolde en fazla 1 pozisyon açılır.
+  "Ters sinyalde kapat" kapalıyken ters sinyal gelirse yeni işlem açılmaz (netting hesapta
+  mevcut pozisyonu istemeden kapatmamak için).
 - Bot sadece kendi açtığı işlemleri yönetir (`magic` numarası). MT5'te elle açtığınız
-  işlemlere dokunmaz.
+  işlemlere dokunmaz; uygulamadan da sadece botun pozisyonları kapatılabilir. `magic`
+  uygulamadan değiştirilemez.
+- **Hata dayanıklılığı:** Emir gönderilemezse (requote, bağlantı) aynı bar içinde 3 kez denenir.
+  MT5 bağlantısı koparsa bot her turda yeniden bağlanmayı dener; düzelince Telegram'a bildirir.
+  Bir semboldeki hata diğer sembolleri durdurmaz ve aynı hata tekrar tekrar bildirilmez.
 - API, token olmadan hiçbir şey yapmaz. `config.json` dosyası şifre ve token içerir;
   git'e eklenmez (`.gitignore`).
+- **Hesap tipi:** Bot başlarken hesabın *hedging* mi *netting* mi olduğunu konsola yazar.
+  Bot ikisinde de çalışır, ancak "Ters sinyalde kapat" seçeneğini açık tutmanız backtest ile
+  en tutarlı davranışı verir.
 
 ## 6. Telegram bildirimleri (opsiyonel)
 

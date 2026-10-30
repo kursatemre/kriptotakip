@@ -8,7 +8,7 @@ from gcmbot.api import create_app
 from gcmbot.backtest import BacktestSettings, compare, optimize, run_backtest
 from gcmbot.broker import BrokerError, FakeBroker
 from gcmbot.config import Config
-from gcmbot.engine import Engine
+from gcmbot.engine import MAX_ATTEMPTS, Engine
 from gcmbot.risk import SymbolInfo, position_size, stop_levels
 from gcmbot.strategies import STRATEGIES, Strategy, make_strategy
 
@@ -96,6 +96,17 @@ def test_backtest_tp_hit():
     assert res["trades"][0]["reason"] == "tp"
     assert res["trades"][0]["r"] > 1.5
     assert res["metrics"]["net_return_pct"] > 0
+    # Tek işlem kazanmış olsa da TP'den önce açık pozisyon ~0.5R ezildi: düşüşe yansımalı
+    assert 0 < res["metrics"]["max_drawdown_pct"] < 1
+
+
+def test_backtest_commission_reduces_r():
+    closes = [1.0] * 30 + [1.0 + 0.001 * i for i in range(1, 60)]
+    df = bars(closes, 0.0005)
+    free = run_backtest(df, OneShot(), BacktestSettings(sl_atr_mult=1, tp_atr_mult=2))["trades"][0]
+    paid = run_backtest(df, OneShot(), BacktestSettings(sl_atr_mult=1, tp_atr_mult=2,
+                                                        commission=0.0002))["trades"][0]
+    assert paid["r"] == pytest.approx(free["r"] - 0.2, abs=0.01)
 
 
 def test_backtest_sl_hit_loses_one_r():
@@ -115,15 +126,51 @@ def test_compare_and_optimize_run():
 
 
 # --------------------------------------------------------------------- motor
-def make_engine(**trading):
+def make_engine(state_path=None, broker=None, **trading):
     cfg = Config(broker="fake")
     cfg.api.token = "t"
     cfg.trading.symbols = ["EURUSD", "XAUUSD"]
     cfg.trading.strategy = "donchian_breakout"
     for k, v in trading.items():
         setattr(cfg.trading, k, v)
-    broker = FakeBroker(bar_seconds=None, seed=1)
-    return Engine(cfg, broker), broker
+    broker = broker or FakeBroker(bar_seconds=None, seed=1)
+    return Engine(cfg, broker, state_path=state_path), broker
+
+
+class Scripted(Strategy):
+    """Her sinyal hesaplamasında sıradaki değeri döndüren test stratejisi."""
+    name = "scripted"
+    warmup = 5
+
+    def __init__(self, seq):
+        super().__init__()
+        self.seq = list(seq)
+
+    def last_signal(self, df):
+        return self.seq.pop(0) if self.seq else 0
+
+
+def scripted_engine(signals, **trading):
+    engine, broker = make_engine(symbols=["EURUSD"], **trading)
+    engine.strategy = Scripted(signals)
+    engine.set_running(True)
+    engine.tick()  # ilk tur: mevcut bar "görülmüş" sayılır
+    return engine, broker
+
+
+def next_bar(engine, broker):
+    broker.step()
+    engine.tick()
+
+
+def freeze_stops(broker):
+    """Sahte brokerdaki pozisyonların SL/TP'si test sırasında tetiklenmesin."""
+    for p in broker._positions.values():
+        p["sl"], p["tp"] = (0.0, 1e9) if p["side"] > 0 else (1e9, 0.0)
+
+
+def fail(*_a, **_k):
+    raise BrokerError("requote")
 
 
 def test_engine_trades_only_when_running():
@@ -170,6 +217,109 @@ def test_apply_settings_validates():
         engine.apply_settings(trading={"strategy": "yok"})
     engine.apply_settings(trading={"strategy": "rsi_pullback", "params": {"period": 7}})
     assert engine.strategy.params["period"] == 7 and engine.strategy.params["trend"] == 200
+    # Parametre verilmeden strateji değişirse eskinin parametreleri taşınmaz, varsayılanlar gelir
+    engine.apply_settings(trading={"strategy": "donchian_breakout"})
+    assert engine.strategy.params == {"period": 20}
+
+
+def test_magic_cannot_be_changed_from_api():
+    engine, _ = make_engine()
+    with pytest.raises(ValueError, match="magic"):
+        engine.apply_settings(trading={"magic": 1})
+    engine.apply_settings(trading={"magic": engine.cfg.trading.magic})  # aynı değer sorun değil
+
+
+def test_engine_stops_if_account_switches_to_live():
+    engine, broker = make_engine()
+    engine.set_running(True)
+    real = broker.account
+    broker.account = lambda: {**real(), "is_demo": False}
+    engine.tick()
+    assert not engine.running
+    assert "DURDURULDU" in engine.events[0]["message"]
+
+
+def test_opposite_signal_closes_and_reverses():
+    engine, broker = scripted_engine([1, -1])
+    magic = engine.cfg.trading.magic
+    next_bar(engine, broker)
+    freeze_stops(broker)
+    next_bar(engine, broker)
+    assert [p.side for p in broker.positions(magic)] == [-1]
+    assert len(broker.history(magic, 30)) == 1
+
+
+def test_opposite_signal_skipped_when_close_on_opposite_disabled():
+    engine, broker = scripted_engine([1, -1], close_on_opposite=False)
+    magic = engine.cfg.trading.magic
+    next_bar(engine, broker)
+    freeze_stops(broker)
+    next_bar(engine, broker)
+    assert [p.side for p in broker.positions(magic)] == [1]
+    assert "ters yönde" in engine.events[0]["message"]
+
+
+def test_failed_order_is_retried_on_next_tick():
+    engine, broker = scripted_engine([1, 1])
+    magic = engine.cfg.trading.magic
+    real_open = broker.open_position
+    broker.open_position = fail
+    next_bar(engine, broker)
+    assert broker.positions(magic) == []
+    assert "tekrar denenecek" in engine.events[0]["message"]
+    broker.open_position = real_open
+    engine.tick()  # aynı bar, ikinci deneme
+    assert len(broker.positions(magic)) == 1
+
+
+def test_order_given_up_after_max_attempts():
+    engine, broker = scripted_engine([1] * 10)
+    broker.open_position = fail
+    broker.step()
+    for _ in range(MAX_ATTEMPTS):
+        engine.tick()
+    assert "sinyal atlandı" in engine.events[0]["message"]
+    engine.tick()  # bar artık işlenmiş sayılır, yeni deneme yok
+    assert len(engine.strategy.seq) == 10 - MAX_ATTEMPTS
+
+
+def test_symbol_error_does_not_block_others_and_is_reported_once():
+    engine, broker = make_engine(symbols=["XAUUSD", "EURUSD"])
+    real = broker.rates
+
+    def rates(symbol, tf, n):
+        if symbol == "XAUUSD":
+            raise AttributeError("'NoneType' object has no attribute 'bid'")
+        return real(symbol, tf, n)
+
+    broker.rates = rates
+    engine.tick()
+    engine.tick()
+    assert "EURUSD" in engine._last_bar
+    assert len([e for e in engine.events if e["level"] == "error"]) == 1
+
+
+def test_step_reconnects_after_account_error():
+    engine, broker = make_engine()
+    reconnects = []
+    broker.reconnect = lambda: reconnects.append(1)
+    real = broker.account
+    broker.account = fail
+    engine._step()
+    assert reconnects == [1] and "requote" in engine.last_error
+    broker.account = real
+    engine._step()
+    assert engine.last_error == "" and "giderildi" in engine.events[0]["message"]
+
+
+def test_daily_start_equity_survives_restart(tmp_path):
+    state = tmp_path / "state.json"
+    engine, broker = make_engine(state_path=state)
+    engine.tick()
+    broker.balance -= 500  # %5 zarar
+    restarted, _ = make_engine(state_path=state, broker=broker)
+    restarted.tick()
+    assert "Günlük zarar" in restarted.halted_reason
 
 
 # ------------------------------------------------------------------------ API
@@ -199,6 +349,17 @@ def test_api_flow(client):
     assert r.status_code == 200 and r.json()["trading"]["symbols"] == ["EURUSD"]
     r = client.post("/api/backtest", headers=H, json={"symbol": "EURUSD", "bars": 1000, "mode": "compare"})
     assert r.status_code == 200 and len(r.json()["results"]) == len(STRATEGIES)
-    assert client.post("/api/positions/1/close", headers=H).status_code == 400
+    assert client.post("/api/positions/1/close", headers=H).status_code == 404
     assert client.post("/api/positions/close-all", headers=H).json() == {"closed": 0}
     assert client.get("/api/events", headers=H).json()
+
+
+def test_api_close_refuses_foreign_position():
+    engine, broker = make_engine()
+    client = TestClient(create_app(engine))
+    foreign = broker.open_position("EURUSD", 1, 0.1, sl=1.0, tp=2.0, magic=999)  # elle açılmış gibi
+    assert client.post(f"/api/positions/{foreign}/close", headers=H).status_code == 404
+    assert len(broker.positions(999)) == 1
+    own = broker.open_position("EURUSD", 1, 0.1, sl=1.0, tp=2.0, magic=engine.cfg.trading.magic)
+    assert client.post(f"/api/positions/{own}/close", headers=H).status_code == 200
+    assert broker.positions(engine.cfg.trading.magic) == []

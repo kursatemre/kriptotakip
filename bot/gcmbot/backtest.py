@@ -5,6 +5,7 @@ Varsayımlar (canlı motorla aynı mantık):
 - Barlar BID fiyatıdır (MT5 gibi); alışlar ASK = bid + spread'den açılır.
 - SL ve TP aynı barda ikisi birden tetiklenirse kötü senaryo (SL) varsayılır.
 - Her işlemde sermayenin risk_pct%'i riske edilir (bileşik).
+- Max düşüş, açık pozisyonun bar içindeki en kötü fiyattaki zararını da içerir.
 """
 
 from __future__ import annotations
@@ -26,15 +27,18 @@ class BacktestSettings:
     tp_atr_mult: float = 3.0
     atr_period: int = 14
     spread: float = 0.0  # fiyat cinsinden (ör. EURUSD için 0.0001 = 1 pip)
+    # İşlem başı toplam maliyet (komisyon + swap tahmini), fiyat cinsinden. Ör. lot başı 7$
+    # gidiş-dönüş komisyon EURUSD'de 0.00007'dir.
+    commission: float = 0.0
     close_on_opposite: bool = True
     initial_equity: float = 10_000.0
 
     @classmethod
-    def from_config(cls, cfg, spread: float = 0.0):
+    def from_config(cls, cfg, spread: float = 0.0, commission: float = 0.0):
         r = cfg.risk
         return cls(risk_pct=r.risk_per_trade_pct, sl_atr_mult=r.sl_atr_mult,
                    tp_atr_mult=r.tp_atr_mult, atr_period=r.atr_period, spread=spread,
-                   close_on_opposite=cfg.trading.close_on_opposite)
+                   commission=commission, close_on_opposite=cfg.trading.close_on_opposite)
 
 
 def run_backtest(df: pd.DataFrame, strategy: Strategy, s: BacktestSettings) -> dict:
@@ -50,13 +54,14 @@ def run_backtest(df: pd.DataFrame, strategy: Strategy, s: BacktestSettings) -> d
     curve = [equity]
     pos = None  # dict(side, entry, sl, tp, sl_dist, i)
 
+    def r_multiple(exit_price):
+        return ((exit_price - pos["entry"]) * pos["side"] - s.commission) / pos["sl_dist"]
+
     def close(exit_price, i, reason):
         nonlocal equity, pos
-        pnl = (exit_price - pos["entry"]) * pos["side"]
-        r = pnl / pos["sl_dist"]
+        r = r_multiple(exit_price)
         money = equity * s.risk_pct / 100 * r
         equity += money
-        curve.append(equity)
         trades.append({
             "side": "buy" if pos["side"] > 0 else "sell",
             "entry_time": int(t[pos["i"]]), "exit_time": int(t[i]),
@@ -64,6 +69,13 @@ def run_backtest(df: pd.DataFrame, strategy: Strategy, s: BacktestSettings) -> d
             "profit": round(money, 2), "reason": reason,
         })
         pos = None
+
+    def mark(i):
+        """Bar içindeki en kötü fiyata göre varlık (açık pozisyonun zararı dahil)."""
+        if pos is None or pos["i"] > i:
+            return equity
+        worst = l[i] if pos["side"] > 0 else h[i] + sp
+        return equity + equity * s.risk_pct / 100 * r_multiple(worst)
 
     for i in range(strategy.warmup, n):
         # 1) Açık pozisyonun bu bar içinde SL/TP'ye değip değmediği
@@ -79,6 +91,7 @@ def run_backtest(df: pd.DataFrame, strategy: Strategy, s: BacktestSettings) -> d
                 elif l[i] + sp <= pos["tp"]:
                     close(min(pos["tp"], o[i] + sp), i, "tp")
 
+        curve.append(mark(i))
         if i == n - 1:
             break
 
@@ -86,7 +99,7 @@ def run_backtest(df: pd.DataFrame, strategy: Strategy, s: BacktestSettings) -> d
         side = int(sig[i])
         if pos is not None and side == -pos["side"] and s.close_on_opposite:
             close(o[i + 1] if pos["side"] > 0 else o[i + 1] + sp, i + 1, "signal")
-        if pos is None and side != 0 and not np.isnan(atr[i]):
+        if pos is None and side != 0 and atr[i] > 0:  # NaN (ısınma) ve 0 ATR elenir
             entry = o[i + 1] + sp if side > 0 else o[i + 1]
             sl_dist = atr[i] * s.sl_atr_mult
             tp_dist = atr[i] * s.tp_atr_mult
@@ -95,6 +108,7 @@ def run_backtest(df: pd.DataFrame, strategy: Strategy, s: BacktestSettings) -> d
 
     if pos is not None:
         close(c[-1] if pos["side"] > 0 else c[-1] + sp, n - 1, "end")
+    curve.append(equity)
 
     return {"metrics": _metrics(trades, curve, s.initial_equity, df), "trades": trades}
 
@@ -159,6 +173,10 @@ def optimize(df: pd.DataFrame, name: str, s: BacktestSettings, train_ratio: floa
     results.sort(key=lambda r: r["score"], reverse=True)
     best = results[:top]
     for r in best:
-        r["test"] = run_backtest(test, cls(r["params"]), s)["metrics"]
+        strat = cls(r["params"])
+        # İndikatörler ısınsın diye test diliminin önüne eğitimin son `warmup` barı eklenir;
+        # run_backtest ısınma barlarında işlem açmadığı için işlemler yine sadece test diliminde olur
+        warm_test = df.iloc[max(split - strat.warmup, 0):]
+        r["test"] = run_backtest(warm_test, strat, s)["metrics"]
         del r["score"]
     return {"strategy": name, "train_bars": len(train), "test_bars": len(test), "results": best}

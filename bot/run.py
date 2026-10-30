@@ -53,11 +53,14 @@ def serve(args):
     broker.connect()
     acc = broker.account()
     kind = "DEMO" if acc["is_demo"] else "GERÇEK (CANLI)"
-    print(f"\nBağlandı: {acc['server']} hesap {acc['login']} [{kind}]  bakiye {acc['balance']} {acc['currency']}")
+    mode = "hedging" if acc.get("hedging") else "netting"
+    print(f"\nBağlandı: {acc['server']} hesap {acc['login']} [{kind}, {mode}]  "
+          f"bakiye {acc['balance']} {acc['currency']}")
     if not acc["is_demo"] and not cfg.allow_live:
         print("UYARI: Bu hesap DEMO değil. allow_live=false olduğu için bot işlem AÇMAYACAK.")
 
-    engine = Engine(cfg, broker, on_config_change=lambda c: save_config(c, args.config))
+    engine = Engine(cfg, broker, on_config_change=lambda c: save_config(c, args.config),
+                    state_path=args.config.with_name("state.json"))
     engine.start_thread()
     engine.event("info", f"Sunucu başladı ({broker.name}, {kind}). Bot durdurulmuş halde, uygulamadan başlatın.")
 
@@ -106,9 +109,10 @@ def backtest(args):
         spread = args.spread if args.spread is not None else max(ask - bid, 0)
         broker.shutdown()
 
-    s = BacktestSettings.from_config(cfg, spread=spread)
+    s = BacktestSettings.from_config(cfg, spread=spread, commission=args.commission)
     print(f"\n{args.symbol} {args.timeframe} | {len(df)} bar | {_fmt_ts(df['time'].iloc[0])} → "
-          f"{_fmt_ts(df['time'].iloc[-1])} | spread {spread:.5g} | risk %{s.risk_pct}/işlem | "
+          f"{_fmt_ts(df['time'].iloc[-1])} | spread {spread:.5g} | maliyet {s.commission:.5g} | "
+          f"risk %{s.risk_pct}/işlem | "
           f"SL {s.sl_atr_mult}xATR TP {s.tp_atr_mult}xATR\n")
 
     if args.optimize:
@@ -142,7 +146,9 @@ def main():
     b.add_argument("--timeframe", default="H1")
     b.add_argument("--bars", type=int, default=5000)
     b.add_argument("--spread", type=float, default=None, help="fiyat cinsinden spread (varsayılan: anlık spread)")
-    b.add_argument("--csv", help="MT5 yerine CSV dosyasından veri oku (time,open,high,low,close)")
+    b.add_argument("--commission", type=float, default=0.0,
+                   help="işlem başı komisyon+swap, fiyat cinsinden (ör. EURUSD'de lot başı 7$ = 0.00007)")
+    b.add_argument("--csv",help="MT5 yerine CSV dosyasından veri oku (time,open,high,low,close)")
     g = b.add_mutually_exclusive_group()
     g.add_argument("--compare", action="store_true", help="tüm stratejileri karşılaştır (varsayılan)")
     g.add_argument("--strategy", choices=list(STRATEGIES))

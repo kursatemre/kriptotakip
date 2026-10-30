@@ -47,6 +47,7 @@ class Broker:
 
     def connect(self) -> None: ...
     def shutdown(self) -> None: ...
+    def reconnect(self) -> None: ...
     def account(self) -> dict: raise NotImplementedError
     def symbol_info(self, symbol: str) -> SymbolInfo: raise NotImplementedError
     def rates(self, symbol: str, timeframe: str, count: int) -> pd.DataFrame: raise NotImplementedError
@@ -93,6 +94,12 @@ class MT5Broker(Broker):
         with self._lock:
             self.mt5.shutdown()
 
+    def reconnect(self):
+        """Terminal kapanıp açıldığında eski bağlantı kullanılamaz; baştan bağlan."""
+        with self._lock:
+            self.mt5.shutdown()
+            self.connect()
+
     def account(self):
         with self._lock:
             a = self.mt5.account_info()
@@ -110,6 +117,7 @@ class MT5Broker(Broker):
                 "margin": a.margin,
                 "margin_free": a.margin_free,
                 "is_demo": a.trade_mode == self.mt5.ACCOUNT_TRADE_MODE_DEMO,
+                "hedging": a.margin_mode == self.mt5.ACCOUNT_MARGIN_MODE_RETAIL_HEDGING,
                 "algo_trading_enabled": bool(term and term.trade_allowed),
             }
 
@@ -143,12 +151,16 @@ class MT5Broker(Broker):
         df = pd.DataFrame(data)[["time", "open", "high", "low", "close", "tick_volume"]]
         return df.iloc[:-1].reset_index(drop=True)
 
+    def _tick(self, symbol):
+        t = self.mt5.symbol_info_tick(symbol)
+        if t is None:
+            raise self._err(f"'{symbol}' fiyatı alınamadı")
+        return t
+
     def price(self, symbol):
         with self._lock:
             self._select(symbol)
-            t = self.mt5.symbol_info_tick(symbol)
-        if t is None:
-            raise self._err(f"'{symbol}' fiyatı alınamadı")
+            t = self._tick(symbol)
         return t.bid, t.ask
 
     def positions(self, magic):
@@ -167,7 +179,10 @@ class MT5Broker(Broker):
         ]
 
     def _filling(self, symbol):
-        mode = self.mt5.symbol_info(symbol).filling_mode
+        info = self.mt5.symbol_info(symbol)
+        if info is None:
+            raise self._err(f"'{symbol}' bilgisi alınamadı")
+        mode = info.filling_mode
         if mode & 1:  # SYMBOL_FILLING_FOK
             return self.mt5.ORDER_FILLING_FOK
         if mode & 2:  # SYMBOL_FILLING_IOC
@@ -185,7 +200,7 @@ class MT5Broker(Broker):
     def open_position(self, symbol, side, volume, sl, tp, magic, comment=""):
         with self._lock:
             self._select(symbol)
-            tick = self.mt5.symbol_info_tick(symbol)
+            tick = self._tick(symbol)
             buy = side > 0
             request = {
                 "action": self.mt5.TRADE_ACTION_DEAL,
@@ -210,7 +225,7 @@ class MT5Broker(Broker):
             if not ps:
                 raise BrokerError(f"#{ticket} numaralı pozisyon bulunamadı")
             p = ps[0]
-            tick = self.mt5.symbol_info_tick(p.symbol)
+            tick = self._tick(p.symbol)
             is_buy = p.type == self.mt5.POSITION_TYPE_BUY
             request = {
                 "action": self.mt5.TRADE_ACTION_DEAL,
@@ -362,7 +377,7 @@ class FakeBroker(Broker):
                 "leverage": 100, "balance": round(self.balance, 2),
                 "equity": round(self.balance + floating, 2), "margin": 0.0,
                 "margin_free": round(self.balance + floating, 2),
-                "is_demo": True, "algo_trading_enabled": True,
+                "is_demo": True, "hedging": True, "algo_trading_enabled": True,
             }
 
     def symbol_info(self, symbol):
