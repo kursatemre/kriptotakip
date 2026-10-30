@@ -39,6 +39,9 @@ fiyat takibi de bu uygulamanın **Kripto** sekmesine taşındı.
    bir grafiğe sürükleyin, *Ortak* sekmesinde **"Canlı işlemlere izin ver"**i işaretleyin.
    Grafiğin sağ üstünde gülen yüz 🙂 görünmeli. MT4 açık ve EA ekli kaldığı sürece bot çalışır.
    MT4 *Hesap Geçmişi* sekmesine sağ tıklayıp **Tüm Geçmiş**'i seçin (uygulamadaki geçmiş buradan gelir).
+   **Köprü güncellendiğinde** (yeni `GcmBotBridge.mq4`) MT4 çalışan EA'yı kendiliğinden
+   yenilemez: dosyayı yeniden kopyalayıp derledikten sonra EA'yı grafiğe tekrar sürükleyin
+   ve *Tamam*'a basın.
 4. **Python 3.11+** kurun ([python.org](https://www.python.org/downloads/)). Kurarken
    "Add to PATH" kutusunu işaretleyin.
 5. Bu repoyu indirin ve `bot\start.bat` dosyasına çift tıklayın. İlk seferde Python ortamını
@@ -98,7 +101,7 @@ dosyasını üretir.
 
 ## 4. En iyi stratejiyi bulmak
 
-Botta 4 strateji var:
+Botta 7 strateji var:
 
 | Strateji | Mantık | Uygun piyasa |
 |---|---|---|
@@ -106,6 +109,9 @@ Botta 4 strateji var:
 | `rsi_pullback` | Trend yönünde RSI geri çekilmesinden dönüş | Trendli, dalgalı |
 | `donchian_breakout` | 20 barlık kanal kırılımı ("turtle") | Güçlü trend |
 | `bollinger_reversion` | Banttan taşıp geri dönüş | Yatay |
+| `rsi2_reversion` | Trend yönünde RSI(2) aşırılığından kısa vadeli dönüş | Dalgalı |
+| `tsmom` | Son N barın getirisi yönünde işlem (zaman serisi momentumu) | Trendli |
+| `ml_boost` | Gradient boosting modeli; sadece geçmiş veriyle düzenli yeniden eğitilir | Hepsi |
 
 Tüm stratejilerde stop-loss ve take-profit ATR'ye göre otomatik konur (varsayılan SL 1.5×ATR,
 TP 3×ATR). Lot, her işlemde sermayenin **%1'ini** riske edecek şekilde hesaplanır.
@@ -131,6 +137,33 @@ düşüş, açık pozisyonların bar içindeki en kötü fiyattaki zararını da
 Değerlendirirken şunlara bakın: **PF** (kâr faktörü) 1.3'ün üstünde olmalı, **max düşüş**
 kaldırabileceğiniz seviyede olmalı ve **işlem sayısı** en az 30-50 olmalı. Az işlemle alınan
 sonuçlar şans olabilir.
+
+### Öğrenen bot (tüm sembollerde otomatik strateji seçimi)
+
+Paneldeki **Öğrenen bot** anahtarı açılınca bot elle seçilen strateji yerine şunu yapar:
+
+1. Hesaptaki tüm sembollerin geçmişini `bot\data`'ya indirir (ilk seferde MT4 grafikleri açıp
+   kapatarak derin geçmiş yükler; bu sırada MT4'ü kullanmayın).
+2. Her sembolde ~60 strateji/parametre adayını spread ve swap dahil dener. Her sembolün **son
+   %25'lik verisi saklı tutulur**; seçim sadece ilk %75'te yapılır ve aday bu dönemin 4
+   parçasının en az 3'ünde kârlı olmalıdır.
+3. Seçilen strateji saklı dönemde de en az 20 işlemde PF ≥ 1.1 tutturursa sembol **aktif** olur.
+   Bot sadece aktif sembollerde işlem açar; sonuçlar *Panel → Öğrenen bot* kartında görünür.
+4. Öğrenme `learning.every_days` günde bir (varsayılan 7) kendiliğinden tekrarlanır;
+   *Şimdi öğren* ile elle de başlatılabilir.
+
+Aynı işlemler komut satırından da yapılabilir:
+
+```bat
+cd bot
+.venv\Scripts\python.exe run.py download --timeframes H1     :: tüm sembollerin verisi
+.venv\Scripts\python.exe run.py research --timeframe H1      :: araştırma, sonuç: data\research_H1.json
+```
+
+Saklı testi geçmek gelecekte kazanacağını garanti etmez: çok sayıda sembol ve aday denendiği
+için bazı geçişler şans eseri olabilir. Aktif semboller demoda haftalarca izlenmeden gerçek
+hesaba geçilmemelidir. İşlem başı %1 riskle iyi bir sistemden bile beklenebilecek getiri **ayda
+birkaç yüzdedir**; "günde %3-5" gibi hedefler hesabı hızla eritecek kadar risk gerektirir.
 
 > ⚠️ Geçmiş performans gelecekteki sonuçları garanti etmez. Kaldıraçlı forex/CFD işlemleri
 > sermayenin tamamını kaybettirebilir.

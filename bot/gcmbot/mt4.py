@@ -136,9 +136,41 @@ class MT4Broker(Broker):
             swap_long=float(f[9]), swap_short=float(f[10]), swap_type=int(f[11]),
         )
 
-    def load_history(self, symbol: str, timeframe: str) -> int:
-        """Grafiği açıp en başa kaydırarak MT4'ün eski barları indirmesini sağlar; bar sayısını döner."""
-        return int(self._call("load_history", symbol, TIMEFRAMES[timeframe])[0][0])
+    def load_history(self, symbol: str, timeframe: str, target: int = 40_000, rounds: int = 40) -> int:
+        """MT4'ün sunucudan eski barları indirmesini sağlar; eldeki bar sayısını döner.
+
+        MT4 eski veriyi sadece grafikte Home tuşuna basılınca indirir (ChartNavigate yetmez).
+        EA grafiği açık tuttuğu sırada o grafiğe Home gönderilir; her turda ~1500 bar gelir.
+        Bar sayısı artmayı bırakınca ya da hedefe ulaşınca durulur.
+        """
+        tf = TIMEFRAMES[timeframe]
+
+        def count() -> int:
+            try:
+                return len(self._call("rates", symbol, tf, target))
+            except BrokerError:  # 4073: hiç geçmiş yok, ilk tur indirecek
+                return 0
+
+        last, stalls = count(), 0
+        for _ in range(rounds):
+            if last >= target:
+                break
+            stop = threading.Event()
+            presser = threading.Thread(target=_press_home, args=(_chart_title(symbol, timeframe), stop),
+                                       daemon=True)
+            presser.start()
+            try:
+                self._call("load_history", symbol, tf)
+            finally:
+                stop.set()
+                presser.join()
+            n = count()
+            # Sunucu bazen geç yanıtlar: iki tur üst üste artış yoksa geçmiş bitmiştir
+            stalls = stalls + 1 if n <= last else 0
+            if stalls >= 2:
+                break
+            last = max(last, n)
+        return last
 
     def rates(self, symbol, timeframe, count):
         # +1: en sondaki bar henüz kapanmamış olan bardır, onu atıyoruz
@@ -177,3 +209,48 @@ class MT4Broker(Broker):
 
     def find_symbols(self, text):
         return sorted(f[0] for f in self._call("symbols", text.upper()))
+
+
+# ---------------------------------------------------------------- Home tuşu (sadece Windows)
+_CHART_TF_NAMES = {"W1": "Weekly", "MN1": "Monthly"}
+
+
+def _chart_title(symbol: str, timeframe: str) -> str:
+    return f"{symbol},{_CHART_TF_NAMES.get(timeframe, timeframe)}"
+
+
+def _press_home(title: str, stop: threading.Event, interval: float = 0.3) -> None:
+    """Başlığı `title` olan MT4 grafik pencerelerine `stop` gelene kadar Home tuşu gönderir."""
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    WM_KEYDOWN, WM_KEYUP, VK_HOME, GW_CHILD = 0x100, 0x101, 0x24, 5
+
+    def windows() -> list[int]:
+        found = []
+        buf = ctypes.create_unicode_buffer(256)
+
+        def child(h, _):
+            user32.GetWindowTextW(h, buf, 256)
+            if buf.value == title:
+                found.append(h)
+            return True
+
+        def top(h, _):
+            user32.EnumChildWindows(h, enum_proc(child), 0)
+            return True
+
+        user32.EnumWindows(enum_proc(top), 0)
+        return found
+
+    while not stop.wait(interval):
+        for h in windows():
+            # Grafik çerçevesi ve içindeki çizim penceresi: tuşu hangisi alırsa
+            for w in (h, user32.GetWindow(h, GW_CHILD)):
+                if w:
+                    user32.PostMessageW(w, WM_KEYDOWN, VK_HOME, 0)
+                    user32.PostMessageW(w, WM_KEYUP, VK_HOME, 0)

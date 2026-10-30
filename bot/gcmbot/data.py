@@ -71,8 +71,9 @@ def download(broker: Broker, symbols: list[str], timeframe: str, bars: int = 100
             meta[symbol] = {**asdict(info), "spread": ask - bid, "atr_" + timeframe: atr,
                             "updated": int(time.time())}
             counts[symbol] = len(df)
+            # Her sembolden sonra yaz: uzun indirme yarıda kesilirse inen veri kullanılabilsin
+            (data_dir / "symbols.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
             progress(f"[{i}/{len(symbols)}] {symbol} {timeframe}: {len(df)} bar")
         except Exception as e:  # bir sembolün hatası diğerlerini durdurmasın
             progress(f"[{i}/{len(symbols)}] {symbol}: HATA {e}")
-    (data_dir / "symbols.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
     return counts

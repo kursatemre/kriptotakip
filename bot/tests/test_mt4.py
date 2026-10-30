@@ -20,6 +20,7 @@ class FakeEA(threading.Thread):
         self.seen = []
         self.stop = threading.Event()
         self.server, self.demo_flag = "GCM-Demo", "1"
+        self.bars, self.max_bars = None, 0  # load_history testi için sunucudaki geçmiş
 
     def handle(self, cmd, args):
         if cmd == "ping":
@@ -29,7 +30,11 @@ class FakeEA(threading.Thread):
         if cmd == "symbol_info":
             return [f"{args[0]}|0.00001|5|0.00001|1.0|0.01|100|0.01|10|-6.5|1.2|0"]
         if cmd == "rates":
-            return [f"{3600 * i}|1.1|1.2|1.0|1.15|10" for i in range(int(args[2]))]
+            n = int(args[2]) if self.bars is None else min(int(args[2]), self.bars)
+            return [f"{3600 * i}|1.1|1.2|1.0|1.15|10" for i in range(n)]
+        if cmd == "load_history":  # her Home basışında bir parça daha gelir
+            self.bars = min(self.bars + 1500, self.max_bars)
+            return [str(self.bars)]
         if cmd == "price":
             return ["1.08000|1.08012"]
         if cmd == "positions":
@@ -173,3 +178,14 @@ def test_two_clients_share_bridge_without_mixing(tmp_path, ea):
 def test_find_symbols(tmp_path, ea):
     assert make(tmp_path).find_symbols("eur") == ["EURUSD", "EURUSDm"]
     assert ea.seen[-1] == ["symbols", "EUR"]
+
+
+def test_load_history_repeats_until_no_more_bars(tmp_path, ea):
+    ea.bars, ea.max_bars = 2048, 6000
+    assert make(tmp_path).load_history("EURUSD", "H1") == 6000
+    assert [c[0] for c in ea.seen].count("load_history") == 5  # 3548, 5048, 6000, 2 tur artış yok
+
+
+def test_load_history_stops_at_target(tmp_path, ea):
+    ea.bars, ea.max_bars = 2048, 100_000
+    assert make(tmp_path).load_history("EURUSD", "H1", target=5000) == 5000
