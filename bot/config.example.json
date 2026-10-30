@@ -1,0 +1,36 @@
+{
+  "broker": "mt5",
+  "allow_live": false,
+  "mt5": {
+    "login": 0,
+    "password": "",
+    "server": "",
+    "path": ""
+  },
+  "api": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "token": ""
+  },
+  "telegram": {
+    "bot_token": "",
+    "chat_id": ""
+  },
+  "trading": {
+    "symbols": ["EURUSD", "XAUUSD"],
+    "timeframe": "H1",
+    "strategy": "ema_trend",
+    "params": {},
+    "magic": 20261030,
+    "poll_seconds": 10,
+    "close_on_opposite": true
+  },
+  "risk": {
+    "risk_per_trade_pct": 1.0,
+    "sl_atr_mult": 1.5,
+    "tp_atr_mult": 3.0,
+    "atr_period": 14,
+    "max_open_positions": 3,
+    "max_daily_loss_pct": 3.0
+  }
+}

@@ -1,0 +1,6 @@
+config.json
+config.tmp
+__pycache__/
+.pytest_cache/
+.venv/
+*.log
