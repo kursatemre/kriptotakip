@@ -13,8 +13,8 @@ class ConnectScreen extends StatefulWidget {
 }
 
 class _ConnectScreenState extends State<ConnectScreen> {
-  late final _url = TextEditingController(
-      text: widget.defaultUrl.isEmpty ? 'http://192.168.1.10:8000' : widget.defaultUrl);
+  // Örnek bir IP ile önceden doldurulmaz: yanlış adresle bağlanmaya çalışılmasın
+  late final _url = TextEditingController(text: widget.defaultUrl);
   final _token = TextEditingController();
   bool _busy = false;
 
@@ -62,6 +62,8 @@ class _ConnectScreenState extends State<ConnectScreen> {
                   autocorrect: false,
                   decoration: const InputDecoration(
                     labelText: 'Sunucu adresi',
+                    hintText: 'http://192.168.1.x:8000',
+                    helperText: 'Bot başlarken konsolda yazan adres',
                     border: OutlineInputBorder(),
                   ),
                 ),

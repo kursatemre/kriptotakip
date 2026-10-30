@@ -12,8 +12,14 @@ class ApiException implements Exception {
 
 /// Bilgisayarda çalışan botun REST API istemcisi.
 class BotApi {
-  BotApi(String baseUrl, this.token)
-      : baseUrl = baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+  BotApi(String baseUrl, this.token) : baseUrl = _normalize(baseUrl);
+
+  /// "192.168.1.11:8000" gibi şemasız adreslere http:// ekler, sondaki /'ları atar.
+  static String _normalize(String url) {
+    var u = url.trim().replaceAll(RegExp(r'/+$'), '');
+    if (u.isNotEmpty && !u.contains('://')) u = 'http://$u';
+    return u;
+  }
 
   final String baseUrl;
   final String token;
