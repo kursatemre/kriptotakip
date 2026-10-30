@@ -8,6 +8,7 @@ from gcmbot.api import create_app
 from gcmbot.backtest import BacktestSettings, compare, optimize, run_backtest
 from gcmbot.broker import BrokerError, FakeBroker
 from gcmbot.config import Config
+from gcmbot.crypto import CACHE_SECONDS, CryptoPrices
 from gcmbot.engine import MAX_ATTEMPTS, Engine
 from gcmbot.risk import SymbolInfo, position_size, stop_levels
 from gcmbot.strategies import STRATEGIES, Strategy, make_strategy
@@ -352,6 +353,44 @@ def test_api_flow(client):
     assert client.post("/api/positions/1/close", headers=H).status_code == 404
     assert client.post("/api/positions/close-all", headers=H).json() == {"closed": 0}
     assert client.get("/api/events", headers=H).json()
+
+
+def test_crypto_prices_cached_and_stale_on_error():
+    calls = []
+
+    def fetch(coins, currency):
+        calls.append(1)
+        if len(calls) > 1:
+            raise OSError("ağ yok")
+        return {"bitcoin": {"usd": 67000.5, "usd_24h_change": -1.25}}
+
+    prices = CryptoPrices(fetch)
+    coins = ["bitcoin", "cardano"]
+    d = prices.get(coins, "usd")
+    assert d["coins"][0] == {"id": "bitcoin", "price": 67000.5, "change_24h_pct": -1.25}
+    assert d["coins"][1]["price"] is None and d["stale"] is False
+    prices.get(coins, "usd")
+    assert len(calls) == 1  # önbellekten geldi
+
+    prices._time -= CACHE_SECONDS + 1  # önbellek süresi doldu, CoinGecko'ya ulaşılamıyor
+    d = prices.get(coins, "usd")
+    assert d["stale"] is True and d["coins"][0]["price"] == 67000.5 and len(calls) == 2
+    prices.get(coins, "usd")
+    assert len(calls) == 2  # hatadan sonra da 60 sn beklenir, CoinGecko'ya yüklenilmez
+
+
+def test_api_crypto():
+    engine, _ = make_engine()
+
+    def down(coins, currency):
+        raise OSError("ağ yok")
+
+    assert TestClient(create_app(engine, crypto=CryptoPrices(down))).get(
+        "/api/crypto", headers=H).status_code == 502
+    up = CryptoPrices(lambda coins, cur: {c: {cur: 1.0, f"{cur}_24h_change": 0.5} for c in coins})
+    r = TestClient(create_app(engine, crypto=up)).get("/api/crypto", headers=H)
+    assert [c["id"] for c in r.json()["coins"]] == ["bitcoin", "ethereum", "cardano"]
+    assert TestClient(create_app(engine, crypto=up)).get("/api/crypto").status_code == 401
 
 
 def test_api_close_refuses_foreign_position():

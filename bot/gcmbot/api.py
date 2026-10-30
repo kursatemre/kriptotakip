@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from .backtest import BacktestSettings, compare, optimize, run_backtest
 from .broker import BrokerError
 from .config import TIMEFRAMES
+from .crypto import CryptoError, CryptoPrices
 from .engine import Engine
 from .strategies import STRATEGIES, describe_strategies, make_strategy
 
@@ -39,8 +40,9 @@ class BacktestIn(BaseModel):
     commission: float = Field(0.0, ge=0)  # işlem başı maliyet, fiyat cinsinden
 
 
-def create_app(engine: Engine, web_dir: Path | None = None) -> FastAPI:
+def create_app(engine: Engine, web_dir: Path | None = None, crypto: CryptoPrices | None = None) -> FastAPI:
     app = FastAPI(title="GCM Bot API")
+    crypto = crypto or CryptoPrices()
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
     def auth(request: Request):
@@ -107,6 +109,14 @@ def create_app(engine: Engine, web_dir: Path | None = None) -> FastAPI:
     @app.get("/api/events", dependencies=api)
     def events(limit: int = 100):
         return list(engine.events)[:limit]
+
+    @app.get("/api/crypto", dependencies=api)
+    def crypto_prices():
+        c = engine.cfg.crypto
+        try:
+            return crypto.get(c.coins, c.currency)
+        except CryptoError as e:
+            raise HTTPException(502, str(e)) from e
 
     @app.get("/api/strategies", dependencies=api)
     def strategies():

@@ -32,5 +32,9 @@
     "atr_period": 14,
     "max_open_positions": 3,
     "max_daily_loss_pct": 3.0
+  },
+  "crypto": {
+    "coins": ["bitcoin", "ethereum", "cardano"],
+    "currency": "usd"
   }
 }

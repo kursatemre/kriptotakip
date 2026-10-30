@@ -66,6 +66,20 @@ class RiskSettings(BaseModel):
     max_daily_loss_pct: float = Field(3.0, gt=0, le=50)
 
 
+class CryptoSettings(BaseModel):
+    # CoinGecko kimlikleri: coingecko.com'da coin sayfasının adresindeki ad (ör. /coins/solana)
+    coins: list[str] = Field(default_factory=lambda: ["bitcoin", "ethereum", "cardano"])
+    currency: str = "usd"
+
+    @field_validator("coins")
+    @classmethod
+    def _coins(cls, v):
+        v = [c.strip().lower() for c in v if c.strip()]
+        if not v:
+            raise ValueError("En az bir coin gerekli")
+        return v
+
+
 class Config(BaseModel):
     broker: Literal["mt5", "fake"] = "mt5"
     # GÜVENLİK: false iken bot gerçek (canlı) hesapta emir göndermeyi REDDEDER
@@ -75,6 +89,7 @@ class Config(BaseModel):
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     trading: TradingSettings = Field(default_factory=TradingSettings)
     risk: RiskSettings = Field(default_factory=RiskSettings)
+    crypto: CryptoSettings = Field(default_factory=CryptoSettings)
 
 
 def load_config(path: Path) -> Config:

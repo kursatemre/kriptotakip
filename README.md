@@ -1,7 +1,8 @@
 # GCM Bot – MetaTrader 5 Al-Sat Botu + Mobil Kontrol Uygulaması
 
 GCM Yatırım'ın **MetaTrader 5** hesabında (önce **demo**) otomatik al-sat yapan bir bot
-ve botu iPhone/Android'den yöneten bir uygulama.
+ve botu iPhone/Android'den yöneten bir uygulama. Eski KriptoTakip uygulamasının kripto
+fiyat takibi de bu uygulamanın **Kripto** sekmesine taşındı.
 
 ```
 ┌──────────── Windows bilgisayar ─────────────┐          ┌──── iPhone / Android ────┐
@@ -10,9 +11,10 @@ ve botu iPhone/Android'den yöneten bir uygulama.
 │        │                                     │  token   │  • Hesap, pozisyonlar     │
 │  bot/  (Python)                              │◄────────►│  • Strateji & risk ayarı  │
 │   • stratejiler + risk yönetimi              │          │  • Backtest/karşılaştırma │
-│   • backtest / optimizasyon                  │          │  • Kayıtlar               │
-│   • REST API (port 8000)                     │          └───────────────────────────┘
-│   • Telegram bildirimi (opsiyonel)           │
+│   • backtest / optimizasyon                  │          │  • Kripto fiyatları       │
+│   • REST API (port 8000)                     │          │  • Kayıtlar               │
+│   • Telegram bildirimi (opsiyonel)           │          └───────────────────────────┘
+│   • kripto fiyatları (CoinGecko, 60 sn önbellek)
 └──────────────────────────────────────────────┘
 ```
 
@@ -158,7 +160,23 @@ sonuçlar şans olabilir.
   Bot ikisinde de çalışır, ancak "Ters sinyalde kapat" seçeneğini açık tutmanız backtest ile
   en tutarlı davranışı verir.
 
-## 6. Telegram bildirimleri (opsiyonel)
+## 6. Kripto fiyatları
+
+Uygulamanın **Kripto** sekmesi, seçtiğiniz coinlerin anlık fiyatını ve 24 saatlik değişimini
+gösterir (30 sn'de bir ve aşağı çekince yenilenir). Fiyatlar bot üzerinden CoinGecko'nun
+ücretsiz API'sinden gelir; bot sonucu 60 sn saklar. CoinGecko'ya ulaşılamazsa son bilinen
+fiyatlar uyarıyla gösterilir.
+
+Coinleri `config.json` içinde değiştirebilirsiniz. Ad, coingecko.com'daki coin sayfasının
+adresindeki addır (ör. `coingecko.com/en/coins/solana` → `solana`):
+
+```json
+"crypto": { "coins": ["bitcoin", "ethereum", "cardano", "solana"], "currency": "usd" }
+```
+
+`currency` için `usd`, `eur`, `try` gibi değerler kullanılabilir.
+
+## 7. Telegram bildirimleri (opsiyonel)
 
 İşlem açılıp kapandığında ve hata olduğunda telefonunuza anında bildirim gelir, uygulama
 kapalı olsa bile:
@@ -168,7 +186,7 @@ kapalı olsa bile:
    `https://api.telegram.org/bot<TOKEN>/getUpdates` adresini açın. `chat.id` değerini
    `telegram.chat_id`'ye yazın.
 
-## 7. Geliştirme
+## 8. Geliştirme
 
 ```bash
 cd bot
@@ -194,8 +212,9 @@ bot/
     risk.py              lot hesabı, SL/TP
     engine.py            canlı işlem döngüsü, günlük zarar limiti, Telegram
     backtest.py          backtest, karşılaştırma, optimizasyon
+    crypto.py            kripto fiyatları (CoinGecko)
     api.py               mobil uygulamanın REST API'si
   tests/
 mobile/                  Flutter uygulaması (iOS, Android, web)
-  lib/screens/           Panel, Pozisyonlar, Strateji, Backtest, Kayıtlar
+  lib/screens/           Panel, Pozisyonlar, Strateji, Backtest, Kripto, Kayıtlar
 ```

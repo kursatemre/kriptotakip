@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'api.dart';
 import 'screens/backtest_screen.dart';
 import 'screens/connect_screen.dart';
+import 'screens/crypto_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/events_screen.dart';
 import 'screens/positions_screen.dart';
@@ -87,7 +88,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _index = 0;
 
-  static const _titles = ['Panel', 'Pozisyonlar', 'Strateji', 'Backtest', 'Kayıtlar'];
+  static const _titles = ['Panel', 'Pozisyonlar', 'Strateji', 'Backtest', 'Kripto', 'Kayıtlar'];
 
   @override
   Widget build(BuildContext context) {
@@ -97,6 +98,7 @@ class _HomeScreenState extends State<HomeScreen> {
       PositionsScreen(api: api),
       StrategyScreen(api: api),
       BacktestScreen(api: api, onApplied: () => setState(() => _index = 2)),
+      CryptoScreen(api: api),
       EventsScreen(api: api),
     ];
     return Scaffold(
@@ -115,11 +117,14 @@ class _HomeScreenState extends State<HomeScreen> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
+        // 6 sekme dar telefon ekranına sığsın diye sadece seçili sekmenin adı yazılır
+        labelBehavior: NavigationDestinationLabelBehavior.onlyShowSelected,
         destinations: const [
           NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Panel'),
           NavigationDestination(icon: Icon(Icons.swap_vert), label: 'Pozisyon'),
           NavigationDestination(icon: Icon(Icons.tune), label: 'Strateji'),
           NavigationDestination(icon: Icon(Icons.science_outlined), label: 'Backtest'),
+          NavigationDestination(icon: Icon(Icons.currency_bitcoin), label: 'Kripto'),
           NavigationDestination(icon: Icon(Icons.list_alt), label: 'Kayıtlar'),
         ],
       ),
