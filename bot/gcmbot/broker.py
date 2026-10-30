@@ -57,6 +57,7 @@ class Broker:
                       magic: int, comment: str = "") -> int: raise NotImplementedError
     def close_position(self, ticket: int) -> None: raise NotImplementedError
     def history(self, magic: int, days: int) -> list[dict]: raise NotImplementedError
+    def find_symbols(self, text: str) -> list[str]: return []
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +262,12 @@ class MT5Broker(Broker):
             })
         return sorted(out, key=lambda x: x["time"], reverse=True)
 
+    def find_symbols(self, text):
+        """Adında `text` geçen semboller (GCM'de EURUSD yerine EURUSD. gibi adlar olabilir)."""
+        with self._lock:
+            found = self.mt5.symbols_get(group=f"*{text}*")
+        return sorted(s.name for s in found or ())
+
 
 # ---------------------------------------------------------------------------
 # Sahte broker (MT5'siz deneme ve testler için)
@@ -442,6 +449,9 @@ class FakeBroker(Broker):
                 {k: v for k, v in d.items() if k != "magic"}
                 for d in reversed(self._closed) if d["magic"] == magic
             ]
+
+    def find_symbols(self, text):
+        return sorted(s for s in _FAKE_SPECS if text.upper() in s)
 
 
 def make_broker(cfg) -> Broker:

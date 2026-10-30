@@ -4,6 +4,7 @@
   python run.py backtest --compare      -> tüm stratejileri karşılaştırır
   python run.py backtest --strategy ema_trend
   python run.py backtest --optimize rsi_pullback
+  python run.py symbols EUR             -> hesapta adında EUR geçen semboller
 """
 
 from __future__ import annotations
@@ -40,6 +41,21 @@ def local_ips() -> list[str]:
     return sorted(ip for ip in ips if not ip.startswith("127."))
 
 
+def check_symbols(broker, symbols) -> bool:
+    """Ayarlardaki semboller hesapta var mı? Yoksa benzer adları önerir."""
+    ok = True
+    for symbol in symbols:
+        try:
+            broker.symbol_info(symbol)
+        except BrokerError:
+            ok = False
+            matches = broker.find_symbols(symbol.strip(".").upper()[:6])
+            hint = f" Hesaptaki benzerleri: {', '.join(matches[:10])}." if matches else ""
+            print(f"UYARI: '{symbol}' sembolü bu hesapta bulunamadı.{hint} "
+                  f"config.json içindeki trading.symbols'ı düzeltin.")
+    return ok
+
+
 def serve(args):
     import uvicorn
 
@@ -58,6 +74,9 @@ def serve(args):
           f"bakiye {acc['balance']} {acc['currency']}")
     if not acc["is_demo"] and not cfg.allow_live:
         print("UYARI: Bu hesap DEMO değil. allow_live=false olduğu için bot işlem AÇMAYACAK.")
+    if not acc["algo_trading_enabled"]:
+        print("UYARI: MT5'te 'Algo Trading' kapalı. Açmadan bot işlem açamaz.")
+    check_symbols(broker, cfg.trading.symbols)
 
     engine = Engine(cfg, broker, on_config_change=lambda c: save_config(c, args.config),
                     state_path=args.config.with_name("state.json"))
@@ -136,6 +155,17 @@ def backtest(args):
     print("\nNOT: Geçmiş performans gelecekteki sonuçları garanti etmez. Önce demoda deneyin.\n")
 
 
+def symbols(args):
+    cfg = load_config(args.config)
+    if args.fake:
+        cfg.broker = "fake"
+    broker = make_broker(cfg)
+    broker.connect()
+    names = broker.find_symbols(args.filter.upper())
+    broker.shutdown()
+    print("\n".join(names) if names else "Eşleşen sembol yok.")
+
+
 def main():
     p = argparse.ArgumentParser(description="GCM MetaTrader 5 al-sat botu")
     p.add_argument("--config", type=Path, default=ROOT / "config.json")
@@ -153,11 +183,13 @@ def main():
     g.add_argument("--compare", action="store_true", help="tüm stratejileri karşılaştır (varsayılan)")
     g.add_argument("--strategy", choices=list(STRATEGIES))
     g.add_argument("--optimize", choices=list(STRATEGIES), help="parametre taraması yap")
+    sym = sub.add_parser("symbols", help="hesaptaki sembol adlarını listele (ör. symbols EUR)")
+    sym.add_argument("filter", nargs="?", default="")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
-        backtest(args) if args.cmd == "backtest" else serve(args)
+        {"backtest": backtest, "symbols": symbols}.get(args.cmd, serve)(args)
     except BrokerError as e:
         print(f"\nHATA: {e}", file=sys.stderr)
         sys.exit(1)

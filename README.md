@@ -31,32 +31,21 @@ fiyat takibi de bu uygulamanın **Kripto** sekmesine taşındı.
 2. **Algo Trading'i açın.** MT5 üst menüdeki **Algo Trading** butonu yeşil olmalı.
    Ayrıca *Araçlar → Seçenekler → Uzman Danışmanlar* altında "Algoritmik işleme izin ver"
    seçeneğini işaretleyin.
-3. **Sembol adlarını kontrol edin.** *Piyasa Gözlemi* penceresindeki adları not edin.
-   GCM'de semboller `EURUSD` yerine `EURUSD.` veya `EURUSDm` gibi ekli olabilir.
-4. **Python 3.11+** kurun ([python.org](https://www.python.org/downloads/)). Kurarken
+3. **Python 3.11+** kurun ([python.org](https://www.python.org/downloads/)). Kurarken
    "Add to PATH" kutusunu işaretleyin.
-5. Bu repoyu indirin, ardından:
-
-   ```bat
-   cd bot
-   pip install -r requirements.txt
-   copy config.example.json config.json
-   ```
-
-6. **`config.json`'u düzenleyin:**
+4. Bu repoyu indirin ve `bot\start.bat` dosyasına çift tıklayın. İlk seferde Python ortamını
+   (`bot\.venv`) kurar, `config.json` oluşturur ve botu başlatır. Sonraki seferlerde sadece başlatır.
+5. **Sembol adlarını kontrol edin.** GCM'de semboller `EURUSD` yerine `EURUSD.` gibi ekli
+   olabilir. Bot başlarken bulamadığı sembolleri benzer adlarıyla birlikte uyarı olarak yazar.
+   Listeyi görmek için: `start.bat symbols EUR` veya `start.bat symbols XAU`.
+6. **`config.json`'u düzenleyin** (sonra botu kapatıp yeniden başlatın):
    - `mt5.login`, `mt5.password`, `mt5.server`: demo hesap bilgileriniz. MT5'te zaten
-     giriş yaptıysanız `login` değerini `0` bırakabilirsiniz; bot açık terminali kullanır.
-   - `trading.symbols`: 3. adımda not ettiğiniz adlar.
+     giriş yaptıysanız `login` değerini `0` bırakın; bot açık terminali kullanır (önerilen,
+     şifre dosyaya yazılmaz).
+   - `trading.symbols`: 5. adımda bulduğunuz adlar.
    - `api.token`: boş bırakın, ilk çalıştırmada otomatik üretilir.
    - `allow_live`: **false kalsın.** Bot bu ayarla gerçek hesapta işlem açmayı reddeder.
-
-7. **Botu çalıştırın:**
-
-   ```bat
-   python run.py
-   ```
-
-   Konsolda telefona girmeniz gereken **sunucu adresi** ve **token** yazar.
+7. Bot çalışırken konsolda telefona girmeniz gereken **sunucu adresi** ve **token** yazar.
    Bot "durdurulmuş" halde başlar; işlemleri uygulamadan siz başlatırsınız.
 
 > Bilgisayarın uyku moduna geçmesini kapatın: *Ayarlar → Sistem → Güç → Uyku: Hiçbir zaman*.
