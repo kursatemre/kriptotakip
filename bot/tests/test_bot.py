@@ -496,3 +496,13 @@ def test_api_close_refuses_foreign_position():
     own = broker.open_position("EURUSD", 1, 0.1, sl=1.0, tp=2.0, magic=engine.cfg.trading.magic)
     assert client.post(f"/api/positions/{own}/close", headers=H).status_code == 200
     assert broker.positions(engine.cfg.trading.magic) == []
+
+
+def test_cost_settings_swap_types():
+    from gcmbot.research import cost_settings
+    pts = cost_settings({"swap_type": 0, "point": 0.00001, "swap_long": -13.0, "swap_short": 1.0, "spread": 0.0002})
+    assert pts.swap_long == pytest.approx(-0.00013) and pts.swap_short == pytest.approx(0.00001)
+    assert pts.spread == 0.0002
+    # Hisse: yıllık %-15 faiz, 360 gün
+    pct = cost_settings({"swap_type": 2, "swap_long": -15.0, "swap_short": -14.0}, price=360.0)
+    assert pct.swap_long == pytest.approx(-0.15) and pct.swap_short == pytest.approx(-0.14)

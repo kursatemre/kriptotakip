@@ -71,11 +71,16 @@ def r_stats(rs) -> dict:
     }
 
 
-def cost_settings(meta: dict, sl_atr_mult: float = 1.5, tp_atr_mult: float = 3.0) -> BacktestSettings:
-    """Sembolün spread'i ve swap'ı ile backtest ayarları."""
-    if meta.get("swap_type", 0) == 0:  # point cinsinden
+def cost_settings(meta: dict, price: float = 0.0, sl_atr_mult: float = 1.5,
+                  tp_atr_mult: float = 3.0) -> BacktestSettings:
+    """Sembolün spread'i ve swap'ı ile backtest ayarları (`price`: swap tipi 2 için güncel fiyat)."""
+    swap_type = meta.get("swap_type", 0)
+    if swap_type == 0:  # point cinsinden
         point = meta.get("point", 0.0)
         swap_long, swap_short = meta.get("swap_long", 0.0) * point, meta.get("swap_short", 0.0) * point
+    elif swap_type == 2:  # yıllık faiz yüzdesi (hisseler): gecelik fiyat karşılığı
+        swap_long = price * meta.get("swap_long", 0.0) / 100 / 360
+        swap_short = price * meta.get("swap_short", 0.0) / 100 / 360
     else:  # para cinsinden (lot başı): yaklaşık olarak fiyata çevir
         per_price = meta["tick_value"] / meta["tick_size"] if meta.get("tick_size") else 0.0
         swap_long = meta.get("swap_long", 0.0) / per_price if per_price else 0.0
@@ -89,7 +94,7 @@ def evaluate_symbol(df: pd.DataFrame, meta: dict, cands: list[tuple[str, dict]],
     df = df.reset_index(drop=True)
     times = df["time"].to_numpy()
     split_time = int(times[int(len(df) * (1 - holdout_frac))])
-    settings = cost_settings(meta)
+    settings = cost_settings(meta, price=float(df["close"].iloc[-1]))
     rows = []
     for name, params in cands:
         strat = make_strategy(name, params)

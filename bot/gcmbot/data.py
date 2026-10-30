@@ -67,7 +67,7 @@ def download(broker: Broker, symbols: list[str], timeframe: str, bars: int = 100
             df.to_parquet(bars_path(symbol, timeframe, data_dir), index=False)
             info = broker.symbol_info(symbol)
             bid, ask = broker.price(symbol)
-            atr = float(ind.atr(df).iloc[-1]) if len(df) > 30 else float("nan")
+            atr = float(ind.atr(df).iloc[-2000:].median()) if len(df) > 30 else float("nan")  # tipik oynaklık
             meta[symbol] = {**asdict(info), "spread": ask - bid, "atr_" + timeframe: atr,
                             "updated": int(time.time())}
             counts[symbol] = len(df)
