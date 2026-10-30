@@ -26,6 +26,7 @@ from .strategies import STRATEGIES, describe_strategies, make_strategy
 class SettingsIn(BaseModel):
     trading: dict | None = None
     risk: dict | None = None
+    learning: dict | None = None
 
 
 class BacktestIn(BaseModel):
@@ -110,6 +111,15 @@ def create_app(engine: Engine, web_dir: Path | None = None, crypto: CryptoPrices
     def events(limit: int = 100):
         return list(engine.events)[:limit]
 
+    @app.get("/api/learning", dependencies=api)
+    def learning():
+        return engine.learning_status()
+
+    @app.post("/api/learn", dependencies=api)
+    def learn():
+        started = engine.learn_now()
+        return {"started": started, **engine.learning_status()}
+
     @app.get("/api/crypto", dependencies=api)
     def crypto_prices():
         c = engine.cfg.crypto
@@ -125,7 +135,7 @@ def create_app(engine: Engine, web_dir: Path | None = None, crypto: CryptoPrices
     @app.put("/api/settings", dependencies=api)
     def settings(body: SettingsIn):
         try:
-            engine.apply_settings(body.trading, body.risk)
+            engine.apply_settings(body.trading, body.risk, body.learning)
         except Exception as e:  # pydantic ValidationError dahil
             raise HTTPException(400, str(e)) from e
         return engine.status()

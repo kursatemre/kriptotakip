@@ -1,9 +1,10 @@
 """MetaTrader 4 köprüsü.
 
 MetaTrader5 Python kütüphanesi MT4'e bağlanamaz. Bu yüzden MT4'te çalışan GcmBotBridge
-uzman danışmanı (bot/mt4/GcmBotBridge.mq4) ile dosya üzerinden konuşulur: Python req.txt'ye
-bir komut yazar, EA 100 ms'de bir bakar, işler ve resp.txt'ye yanıt yazar. Dosyalar MT4'ün
-ortak klasöründedir: %APPDATA%\\MetaQuotes\\Terminal\\Common\\Files\\gcmbot
+uzman danışmanı (bot/mt4/GcmBotBridge.mq4) ile dosya üzerinden konuşulur: her istemci
+(bot, backtest, araştırma) kendi req_<istemci>.txt dosyasına komut yazar, EA 100 ms'de bir
+bakar, işler ve resp_<istemci>.txt'ye yanıt yazar. Böylece bot çalışırken backtest de
+yapılabilir. Dosyalar MT4'ün ortak klasöründedir: %APPDATA%\\MetaQuotes\\Terminal\\Common\\Files\\gcmbot
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import pandas as pd
 from .broker import Broker, BrokerError, Position
 from .risk import SymbolInfo
 
-BRIDGE_VERSION = "1"
+BRIDGE_VERSION = "2"
 TIMEFRAMES = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
 # EA dosyaları ANSI yazar (Türkçe Windows'ta cp1254); "mbcs" sistemin ANSI kod sayfasıdır
 ENCODING = "mbcs" if os.name == "nt" else "latin-1"
@@ -41,7 +42,7 @@ class MT4Broker(Broker):
         self.timeout = timeout
         self.poll = poll
         self._lock = threading.RLock()
-        self._prefix = secrets.token_hex(3)
+        self.client = secrets.token_hex(4)  # bu istemcinin dosya adı eki
         self._seq = 0
 
     # ------------------------------------------------------------------ protokol
@@ -55,9 +56,10 @@ class MT4Broker(Broker):
     def _call(self, cmd: str, *args) -> list[list[str]]:
         with self._lock:
             self._seq += 1
-            rid = f"{self._prefix}{self._seq}"
+            rid = str(self._seq)
             self.dir.mkdir(parents=True, exist_ok=True)
-            req, resp, tmp = self.dir / "req.txt", self.dir / "resp.txt", self.dir / "req.tmp"
+            c = self.client
+            req, resp, tmp = self.dir / f"req_{c}.txt", self.dir / f"resp_{c}.txt", self.dir / f"req_{c}.tmp"
             resp.unlink(missing_ok=True)
             # Zaman damgası: EA 30 sn'den eski istekleri reddeder
             fields = [rid, str(int(time.time())), cmd, *map(str, args)]
@@ -96,8 +98,14 @@ class MT4Broker(Broker):
 
     # ------------------------------------------------------------- Broker arayüzü
     def connect(self):
-        # Önceki (çökmüş) bir çalıştırmadan kalan istek işlenmesin
-        (self.dir / "req.txt").unlink(missing_ok=True)
+        # Çökmüş istemcilerden kalan dosyaları temizle (EA 30 sn'den eski istekleri zaten işlemez)
+        if self.dir.is_dir():
+            for p in [*self.dir.glob("req_*"), *self.dir.glob("resp_*"), *self.dir.glob("work_*")]:
+                try:
+                    if time.time() - p.stat().st_mtime > 120:
+                        p.unlink()
+                except OSError:
+                    pass
         version = self._call("ping")[0][0]
         if version != BRIDGE_VERSION:
             raise BrokerError(f"GcmBotBridge sürümü uyumsuz (EA {version}, bot {BRIDGE_VERSION}). "
@@ -125,7 +133,12 @@ class MT4Broker(Broker):
             name=f[0], point=float(f[1]), digits=int(f[2]), tick_size=float(f[3]),
             tick_value=float(f[4]), volume_min=float(f[5]), volume_max=float(f[6]),
             volume_step=float(f[7]), stops_level=int(f[8]),
+            swap_long=float(f[9]), swap_short=float(f[10]), swap_type=int(f[11]),
         )
+
+    def load_history(self, symbol: str, timeframe: str) -> int:
+        """Grafiği açıp en başa kaydırarak MT4'ün eski barları indirmesini sağlar; bar sayısını döner."""
+        return int(self._call("load_history", symbol, TIMEFRAMES[timeframe])[0][0])
 
     def rates(self, symbol, timeframe, count):
         # +1: en sondaki bar henüz kapanmamış olan bardır, onu atıyoruz

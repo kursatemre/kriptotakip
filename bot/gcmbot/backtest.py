@@ -30,15 +30,35 @@ class BacktestSettings:
     # İşlem başı toplam maliyet (komisyon + swap tahmini), fiyat cinsinden. Ör. lot başı 7$
     # gidiş-dönüş komisyon EURUSD'de 0.00007'dir.
     commission: float = 0.0
+    # Gecelik swap, fiyat cinsinden (+ alacak, - borç); çarşamba gecesi 3 kat sayılır
+    swap_long: float = 0.0
+    swap_short: float = 0.0
+    # Bu kadar bar sonra pozisyon kapatılır (0 = kapalı; strateji kendi değerini verebilir)
+    max_hold_bars: int = 0
     close_on_opposite: bool = True
     initial_equity: float = 10_000.0
 
     @classmethod
-    def from_config(cls, cfg, spread: float = 0.0, commission: float = 0.0):
+    def from_config(cls, cfg, spread: float = 0.0, commission: float = 0.0,
+                    swap_long: float = 0.0, swap_short: float = 0.0):
         r = cfg.risk
         return cls(risk_pct=r.risk_per_trade_pct, sl_atr_mult=r.sl_atr_mult,
                    tp_atr_mult=r.tp_atr_mult, atr_period=r.atr_period, spread=spread,
-                   commission=commission, close_on_opposite=cfg.trading.close_on_opposite)
+                   commission=commission, swap_long=swap_long, swap_short=swap_short,
+                   max_hold_bars=r.max_hold_bars, close_on_opposite=cfg.trading.close_on_opposite)
+
+
+def rollovers(t0: int, t1: int) -> int:
+    """t0'da açılıp t1'de kapanan pozisyonun ödediği swap gecesi sayısı.
+
+    Swap pazartesi-cuma her gece alınır; hafta sonu için çarşamba gecesi 3 kat sayılır.
+    """
+    n = 0
+    for day in range(int(t0) // 86400, int(t1) // 86400):
+        weekday = (day + 3) % 7  # 1 Ocak 1970 perşembe; pazartesi = 0
+        if weekday < 5:
+            n += 3 if weekday == 2 else 1
+    return n
 
 
 def run_backtest(df: pd.DataFrame, strategy: Strategy, s: BacktestSettings) -> dict:
@@ -48,18 +68,20 @@ def run_backtest(df: pd.DataFrame, strategy: Strategy, s: BacktestSettings) -> d
     o, h, l, c = (df[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close"))
     t = df["time"].to_numpy()
     n, sp = len(df), s.spread
+    max_hold = strategy.max_hold_bars or s.max_hold_bars
 
     trades = []
     equity = s.initial_equity
     curve = [equity]
     pos = None  # dict(side, entry, sl, tp, sl_dist, i)
 
-    def r_multiple(exit_price):
-        return ((exit_price - pos["entry"]) * pos["side"] - s.commission) / pos["sl_dist"]
+    def r_multiple(exit_price, swap=0.0):
+        return ((exit_price - pos["entry"]) * pos["side"] - s.commission + swap) / pos["sl_dist"]
 
     def close(exit_price, i, reason):
         nonlocal equity, pos
-        r = r_multiple(exit_price)
+        nights = rollovers(t[pos["i"]], t[i])
+        r = r_multiple(exit_price, nights * (s.swap_long if pos["side"] > 0 else s.swap_short))
         money = equity * s.risk_pct / 100 * r
         equity += money
         trades.append({
@@ -90,6 +112,9 @@ def run_backtest(df: pd.DataFrame, strategy: Strategy, s: BacktestSettings) -> d
                     close(max(pos["sl"], o[i] + sp), i, "sl")
                 elif l[i] + sp <= pos["tp"]:
                     close(min(pos["tp"], o[i] + sp), i, "tp")
+        # Süre doldu: bar kapanışında çık
+        if pos is not None and max_hold and i - pos["i"] + 1 >= max_hold:
+            close(c[i] if pos["side"] > 0 else c[i] + sp, i, "time")
 
         curve.append(mark(i))
         if i == n - 1:

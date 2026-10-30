@@ -6,3 +6,6 @@ __pycache__/
 .pytest_cache/
 .venv/
 *.log
+data/
+learned.json
+learned.tmp

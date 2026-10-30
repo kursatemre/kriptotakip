@@ -44,7 +44,7 @@ def test_indicators_are_causal():
 
 
 # ---------------------------------------------------------------- stratejiler
-@pytest.mark.parametrize("name", list(STRATEGIES))
+@pytest.mark.parametrize("name", [n for n in STRATEGIES if n != "ml_boost"])
 def test_strategies_produce_valid_signals(name):
     df = FakeBroker(bar_seconds=None, history_bars=3000).rates("EURUSD", "H1", 3000)
     s = make_strategy(name).signals(df)
@@ -116,6 +116,46 @@ def test_backtest_sl_hit_loses_one_r():
     t = res["trades"][0]
     assert t["reason"] == "sl" and t["r"] == pytest.approx(-1, abs=0.01)
     assert res["metrics"]["net_return_pct"] == pytest.approx(-1, abs=0.01)
+
+
+def test_rollovers_count_weekday_nights_with_wednesday_triple():
+    from gcmbot.backtest import rollovers
+    monday = 4 * 86400  # 5 Ocak 1970 pazartesi
+    assert rollovers(monday, monday + 3600) == 0  # aynı gün
+    assert rollovers(monday, monday + 86400) == 1
+    assert rollovers(monday + 2 * 86400, monday + 3 * 86400) == 3  # çarşamba gecesi
+    assert rollovers(monday + 4 * 86400, monday + 7 * 86400) == 1  # cuma → pazartesi
+    assert rollovers(monday, monday + 7 * 86400) == 7
+
+
+def test_backtest_time_exit_and_swap():
+    closes = [1.0] * 30 + [1.0 + 0.00001 * i for i in range(1, 300)]  # TP/SL'ye uzak, yavaş yükseliş
+    df = bars(closes, 0.0005)
+    df["time"] = 4 * 86400 + np.arange(len(df)) * 3600
+    base = BacktestSettings(sl_atr_mult=1, tp_atr_mult=2, max_hold_bars=48)
+    tr = run_backtest(df, OneShot(), base)["trades"][0]
+    assert tr["reason"] == "time" and tr["exit_time"] - tr["entry_time"] == 47 * 3600
+    paid = run_backtest(df, OneShot(), BacktestSettings(sl_atr_mult=1, tp_atr_mult=2, max_hold_bars=48,
+                                                        swap_long=-0.0001))["trades"][0]
+    assert paid["r"] < tr["r"]
+
+
+def test_ml_labels():
+    from gcmbot.ml import barrier_labels
+    up = bars(np.linspace(1.0, 1.5, 300), 0.0005)
+    yl, ys = barrier_labels(up, 1.5, 3.0, 50)
+    valid = ~np.isnan(yl)
+    assert valid.sum() > 100 and yl[valid][20:].mean() > 0.9 and ys[valid][20:].mean() < 0.1
+    assert np.isnan(yl[-10:]).all()  # geleceği yetmeyen barlar etiketlenmez
+
+
+def test_ml_has_no_lookahead():
+    df = FakeBroker(bar_seconds=None, history_bars=1600).rates("EURUSD", "H1", 1600)
+    params = {"train_bars": 600, "retrain": 100, "horizon": 10, "threshold": 0.3}
+    full = make_strategy("ml_boost", params).signals(df)
+    part = make_strategy("ml_boost", params).signals(df.iloc[:1300])
+    assert (full != 0).sum() > 0
+    assert (full.iloc[:1300].to_numpy() == part.to_numpy()).all()
 
 
 def test_compare_and_optimize_run():
@@ -313,6 +353,51 @@ def test_step_reconnects_after_account_error():
     assert engine.last_error == "" and "giderildi" in engine.events[0]["message"]
 
 
+def test_auto_mode_trades_only_active_learned_symbols():
+    engine, broker = make_engine()
+    engine.cfg.learning.enabled = True
+    engine.learned = {"time": 0, "timeframe": "H1", "assignments": {
+        "EURUSD": {"strategy": "donchian_breakout", "params": {"period": 10}, "active": True},
+        "XAUUSD": {"strategy": "donchian_breakout", "params": {"period": 10}, "active": False},
+    }}
+    engine._build_strategies()
+    assert engine.active_symbols() == ["EURUSD"]
+    engine.set_running(True)
+    for _ in range(300):
+        broker.step()
+        engine.tick()
+    magic = engine.cfg.trading.magic
+    traded = {p.symbol for p in broker.positions(magic)} | {d["symbol"] for d in broker.history(magic, 30)}
+    assert traded == {"EURUSD"}
+    assert engine.status()["learning"]["enabled"] is True
+
+
+def test_time_limit_closes_position():
+    engine, broker = scripted_engine([1])
+    engine.cfg.risk.max_hold_bars = 3
+    magic = engine.cfg.trading.magic
+    next_bar(engine, broker)
+    assert len(broker.positions(magic)) == 1
+    freeze_stops(broker)
+    for _ in range(4):
+        next_bar(engine, broker)
+    assert broker.positions(magic) == []
+    assert any("süresi doldu" in e["message"] for e in engine.events)
+
+
+def test_learner_end_to_end(tmp_path):
+    from gcmbot import learner
+    cfg = Config(broker="fake")
+    cfg.learning.universe = ["EURUSD", "XAUUSD"]
+    cfg.learning.use_ml = False
+    broker = FakeBroker(bar_seconds=None, history_bars=3000)
+    out = learner.learn(broker, cfg, tmp_path / "learned.json", data_dir=tmp_path, progress=lambda m: None)
+    assert (tmp_path / "learned.json").exists() and (tmp_path / "EURUSD_H1.parquet").exists()
+    assert out["symbols_researched"] == 2 and set(out["assignments"]) <= {"EURUSD", "XAUUSD"}
+    for a in out["assignments"].values():
+        assert a["strategy"] in STRATEGIES and "holdout" in a and isinstance(a["active"], bool)
+
+
 def test_daily_start_equity_survives_restart(tmp_path):
     state = tmp_path / "state.json"
     engine, broker = make_engine(state_path=state)
@@ -391,6 +476,15 @@ def test_api_crypto():
     r = TestClient(create_app(engine, crypto=up)).get("/api/crypto", headers=H)
     assert [c["id"] for c in r.json()["coins"]] == ["bitcoin", "ethereum", "cardano"]
     assert TestClient(create_app(engine, crypto=up)).get("/api/crypto").status_code == 401
+
+
+def test_api_learning_endpoints(client):
+    r = client.get("/api/learning", headers=H).json()
+    assert r["enabled"] is False and r["assignments"] == {}
+    r = client.put("/api/settings", headers=H, json={"learning": {"enabled": True, "every_days": 3}})
+    assert r.status_code == 200 and r.json()["learning"]["settings"]["every_days"] == 3
+    assert client.put("/api/settings", headers=H, json={"learning": {"every_days": 0}}).status_code == 400
+    assert client.get("/api/learning").status_code == 401
 
 
 def test_api_close_refuses_foreign_position():

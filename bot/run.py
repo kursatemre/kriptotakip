@@ -80,7 +80,8 @@ def serve(args):
     check_symbols(broker, cfg.trading.symbols)
 
     engine = Engine(cfg, broker, on_config_change=lambda c: save_config(c, args.config),
-                    state_path=args.config.with_name("state.json"))
+                    state_path=args.config.with_name("state.json"),
+                    learned_path=args.config.with_name("learned.json"))
     engine.start_thread()
     engine.event("info", f"Sunucu başladı ({broker.name}, {kind}). Bot durdurulmuş halde, uygulamadan başlatın.")
 
@@ -167,8 +168,41 @@ def symbols(args):
     print("\n".join(names) if names else "Eşleşen sembol yok.")
 
 
+def download_cmd(args):
+    from gcmbot import data
+
+    cfg = load_config(args.config)
+    if args.fake:
+        cfg.broker = "fake"
+    broker = make_broker(cfg)
+    broker.connect()
+    names = args.symbols or broker.find_symbols("")
+    for tf in args.timeframes:
+        data.download(broker, names, tf.upper(), deep=not args.quick)
+    broker.shutdown()
+
+
+def research_cmd(args):
+    from gcmbot import data, research
+
+    names = args.symbols or sorted(data.load_symbols())
+    rep = research.run(names, args.timeframe.upper(), include_ml=not args.no_ml, max_cost_ratio=args.max_cost)
+    s = rep["summary"]
+    print(f"\n{s['symbols']} sembol araştırıldı ({rep['candidates']} aday/sembol), "
+          f"{len(rep['skipped'])} sembol atlandı (veri yok / maliyet yüksek).")
+    print(f"Seçim yapılabilen: {s['with_selection']} | saklı testte artıda: {s['holdout_positive']} | "
+          f"saklı test ortalaması {s['holdout_avg_r']:+.4f}R ({s['holdout_trades']} işlem)")
+    print(f"Saklı testi GEÇEN semboller: {', '.join(s['passed']) or 'yok'}")
+    for sym in s["passed"]:
+        b = rep["results"][sym]["best"]
+        print(f"  {sym:<10} {b['strategy']} {b['params']} | geliştirme {b['dev']['trades']} işlem "
+              f"{b['dev']['avg_r']:+.3f}R | saklı {b['holdout']['trades']} işlem PF {b['holdout']['pf']} "
+              f"{b['holdout']['avg_r']:+.3f}R")
+    print(f"\nAyrıntılar: {data.DATA_DIR / f'research_{rep['timeframe']}.json'}")
+
+
 def main():
-    p = argparse.ArgumentParser(description="GCM MetaTrader 5 al-sat botu")
+    p = argparse.ArgumentParser(description="GCM al-sat botu")
     p.add_argument("--config", type=Path, default=ROOT / "config.json")
     p.add_argument("--fake", action="store_true", help="MT5 yerine sahte broker kullan (deneme)")
     sub = p.add_subparsers(dest="cmd")
@@ -179,18 +213,28 @@ def main():
     b.add_argument("--spread", type=float, default=None, help="fiyat cinsinden spread (varsayılan: anlık spread)")
     b.add_argument("--commission", type=float, default=0.0,
                    help="işlem başı komisyon+swap, fiyat cinsinden (ör. EURUSD'de lot başı 7$ = 0.00007)")
-    b.add_argument("--csv",help="MT5 yerine CSV dosyasından veri oku (time,open,high,low,close)")
+    b.add_argument("--csv", help="MT5 yerine CSV dosyasından veri oku (time,open,high,low,close)")
     g = b.add_mutually_exclusive_group()
     g.add_argument("--compare", action="store_true", help="tüm stratejileri karşılaştır (varsayılan)")
     g.add_argument("--strategy", choices=list(STRATEGIES))
     g.add_argument("--optimize", choices=list(STRATEGIES), help="parametre taraması yap")
     sym = sub.add_parser("symbols", help="hesaptaki sembol adlarını listele (ör. symbols EUR)")
     sym.add_argument("filter", nargs="?", default="")
+    d = sub.add_parser("download", help="sembollerin geçmiş verisini bot/data'ya indir")
+    d.add_argument("--symbols", nargs="*", help="varsayılan: hesaptaki tüm semboller")
+    d.add_argument("--timeframes", nargs="+", default=["H1"])
+    d.add_argument("--quick", action="store_true", help="grafiği geriye kaydırıp derin geçmiş indirme")
+    r = sub.add_parser("research", help="indirilen veride tüm sembollerde strateji araştırması")
+    r.add_argument("--symbols", nargs="*", help="varsayılan: indirilen tüm semboller")
+    r.add_argument("--timeframe", default="H1")
+    r.add_argument("--no-ml", action="store_true", help="makine öğrenmesi stratejisini atla (hızlı)")
+    r.add_argument("--max-cost", type=float, default=0.2, help="en fazla spread/ATR oranı")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
-        {"backtest": backtest, "symbols": symbols}.get(args.cmd, serve)(args)
+        commands = {"backtest": backtest, "symbols": symbols, "download": download_cmd, "research": research_cmd}
+        commands.get(args.cmd, serve)(args)
     except BrokerError as e:
         print(f"\nHATA: {e}", file=sys.stderr)
         sys.exit(1)

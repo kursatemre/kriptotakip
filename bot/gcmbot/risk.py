@@ -17,6 +17,10 @@ class SymbolInfo:
     volume_max: float
     volume_step: float
     stops_level: int = 0  # brokerın izin verdiği minimum stop mesafesi (point)
+    # Gecelik swap (MT4 MODE_SWAPTYPE'a göre birimi: 0 point, 1 baz para, 2 faiz %, 3 teminat parası)
+    swap_long: float = 0.0
+    swap_short: float = 0.0
+    swap_type: int = 0
 
 
 def stop_levels(side: int, entry: float, atr_value: float, sl_mult: float, tp_mult: float,

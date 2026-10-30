@@ -18,25 +18,37 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from . import indicators as ind
+from . import learner
 from .broker import Broker, BrokerError
 from .config import Config
 from .risk import position_size, stop_levels
-from .strategies import make_strategy
+from .strategies import Strategy, make_strategy
 
 log = logging.getLogger("gcmbot")
 
 BARS = 500
 # Başarısız emir (requote, bağlantı hatası...) aynı bar içinde en fazla bu kadar denenir
 MAX_ATTEMPTS = 3
+TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400}
+# Öğrenme başarısız olursa (ör. bağlantı) en erken bu kadar sonra tekrar denenir
+LEARN_RETRY_SECONDS = 3600
 
 
 class Engine:
-    def __init__(self, cfg: Config, broker: Broker, on_config_change=None, state_path: Path | None = None):
+    def __init__(self, cfg: Config, broker: Broker, on_config_change=None, state_path: Path | None = None,
+                 learned_path: Path | None = None):
         self.cfg = cfg
         self.broker = broker
         self.on_config_change = on_config_change
         # Gün başı varlık burada saklanır; bot yeniden başlatılınca günlük zarar limiti sıfırlanmaz
         self.state_path = state_path
+        # Öğrenme sonucu (sembol → strateji); None ise sadece bellekte tutulur
+        self.learned_path = learned_path
+        self.learned = learner.load_learned(learned_path) if learned_path else None
+        self.strategies: dict[str, Strategy] = {}
+        self.learning_running = False
+        self.learning_progress = ""
+        self._last_learn_attempt = 0.0
         self.running = False  # True iken yeni işlem açar
         self.halted_reason = ""  # günlük zarar limiti vb.
         self.last_check = 0.0
@@ -53,6 +65,76 @@ class Engine:
         self._thread: threading.Thread | None = None
         self.strategy = make_strategy(cfg.trading.strategy, cfg.trading.params)
         self._load_state()
+        self._build_strategies()
+
+    # ---------------------------------------------------------------- öğrenme
+    @property
+    def auto(self) -> bool:
+        return self.cfg.learning.enabled
+
+    def _assignments(self) -> dict:
+        lr = self.learned
+        if not lr or lr.get("timeframe") != self.cfg.trading.timeframe:
+            return {}
+        return lr.get("assignments", {})
+
+    def _build_strategies(self):
+        self.strategies = {}
+        for symbol, a in self._assignments().items():
+            try:
+                self.strategies[symbol] = make_strategy(a["strategy"], a["params"])
+            except ValueError as e:
+                log.warning("%s: öğrenilen strateji yüklenemedi: %s", symbol, e)
+
+    def active_symbols(self) -> list[str]:
+        """Yeni işlem açılabilecek semboller."""
+        if not self.auto:
+            return list(self.cfg.trading.symbols)
+        return [s for s, a in self._assignments().items() if a.get("active") and s in self.strategies]
+
+    def strategy_for(self, symbol: str) -> Strategy | None:
+        return self.strategies.get(symbol) if self.auto else self.strategy
+
+    def learn_now(self) -> bool:
+        """Öğrenmeyi arka planda başlatır; zaten çalışıyorsa False döner."""
+        with self._lock:
+            if self.learning_running:
+                return False
+            self.learning_running = True
+            self._last_learn_attempt = time.time()
+        threading.Thread(target=self._learn, name="learn", daemon=True).start()
+        return True
+
+    def _learn_due(self) -> bool:
+        if not self.auto or self.learning_running:
+            return False
+        if time.time() - self._last_learn_attempt < LEARN_RETRY_SECONDS:
+            return False
+        lr = self.learned
+        return (not lr or lr.get("timeframe") != self.cfg.trading.timeframe
+                or time.time() - lr.get("time", 0) > self.cfg.learning.every_days * 86400)
+
+    def _learn(self):
+        self.event("info", "Öğrenme başladı: veriler güncelleniyor ve tüm semboller araştırılıyor.", notify=True)
+
+        def progress(msg):
+            self.learning_progress = msg
+            log.info(msg)
+
+        try:
+            result = learner.learn(self.broker, self.cfg, self.learned_path, progress=progress)
+            with self._lock:
+                self.learned = result
+                self._build_strategies()
+            active = self.active_symbols() if self.auto else [
+                s for s, a in result["assignments"].items() if a["active"]]
+            self.event("info", f"Öğrenme bitti: {len(active)} sembol işlem için uygun"
+                               f"{' (' + ', '.join(active) + ')' if active else ''}.", notify=True)
+        except Exception as e:
+            self.event("error", f"Öğrenme başarısız: {e}", notify=True)
+        finally:
+            self.learning_running = False
+            self.learning_progress = ""
 
     # ------------------------------------------------------------------ olaylar
     def event(self, level: str, message: str, notify: bool = False):
@@ -138,7 +220,8 @@ class Engine:
             raise BrokerError("MetaTrader'da otomatik işlem kapalı: 'AutoTrading/Algo Trading' butonunu açın "
                               "(MT4'te ayrıca GcmBotBridge'de 'Canlı işlemlere izin ver' işaretli olmalı).")
 
-    def apply_settings(self, trading: dict | None = None, risk: dict | None = None):
+    def apply_settings(self, trading: dict | None = None, risk: dict | None = None,
+                       learning: dict | None = None):
         """Ayarları doğrular, uygular ve kaydeder. Hatalıysa ValueError fırlatır."""
         with self._lock:
             new = self.cfg.model_copy(deep=True)
@@ -153,16 +236,23 @@ class Engine:
                 new.trading = new.trading.model_validate(merged)
             if risk:
                 new.risk = new.risk.model_validate({**new.risk.model_dump(), **risk})
+            if learning:
+                new.learning = new.learning.model_validate({**new.learning.model_dump(), **learning})
             strategy = make_strategy(new.trading.strategy, new.trading.params)
             new.trading.params = strategy.params
-            self.cfg.trading, self.cfg.risk = new.trading, new.risk
+            self.cfg.trading, self.cfg.risk, self.cfg.learning = new.trading, new.risk, new.learning
             self.strategy = strategy
+            self._build_strategies()
             self._reset_bar_tracking()
             self._last_signal.clear()
         if self.on_config_change:
             self.on_config_change(self.cfg)
-        self.event("info", f"Ayarlar güncellendi: {strategy.title} {strategy.params}, "
-                           f"{', '.join(self.cfg.trading.symbols)} {self.cfg.trading.timeframe}")
+        if self.auto:
+            self.event("info", f"Ayarlar güncellendi: öğrenen mod, {self.cfg.trading.timeframe}, "
+                               f"{len(self.active_symbols())} aktif sembol")
+        else:
+            self.event("info", f"Ayarlar güncellendi: {strategy.title} {strategy.params}, "
+                               f"{', '.join(self.cfg.trading.symbols)} {self.cfg.trading.timeframe}")
 
     # -------------------------------------------------------------------- döngü
     def _loop(self):
@@ -188,6 +278,8 @@ class Engine:
                 self.broker.reconnect()
             except Exception as re:
                 log.warning("Yeniden bağlanılamadı: %s", re)
+        if self._learn_due():
+            self.learn_now()
 
     def tick(self):
         """Tek bir kontrol turu (testlerde doğrudan çağrılır)."""
@@ -202,9 +294,12 @@ class Engine:
                     self.running = False
                     self.event("error", f"Bot DURDURULDU: {e}", notify=True)
             self._check_daily_loss(acc)
-            for symbol in self.cfg.trading.symbols:
+            active = self.active_symbols()
+            # Açık pozisyonu olan semboller de izlenir (süre sınırı); pasif sembolde yeni işlem açılmaz
+            held = sorted({p.symbol for p in self.broker.positions(self.cfg.trading.magic)})
+            for symbol in dict.fromkeys([*active, *held]):
                 try:
-                    self._process_symbol(symbol, acc)
+                    self._process_symbol(symbol, acc, can_open=symbol in active)
                     self._symbol_errors.pop(symbol, None)
                 except Exception as e:  # bir sembolün hatası diğerlerini engellemesin
                     msg = f"{symbol}: {e}"
@@ -227,11 +322,13 @@ class Engine:
             self.halted_reason = f"Günlük zarar limiti aşıldı (%{loss_pct:.2f} ≥ %{limit}). Yarına kadar yeni işlem yok."
             self.event("warn", self.halted_reason, notify=True)
 
-    def _process_symbol(self, symbol: str, acc: dict):
-        df = self.broker.rates(symbol, self.cfg.trading.timeframe, BARS)
-        if len(df) < self.strategy.warmup:
-            raise BrokerError(f"Yetersiz veri ({len(df)} bar, en az {self.strategy.warmup} gerekli)")
-        bar_time = int(df["time"].iloc[-1])
+    def _process_symbol(self, symbol: str, acc: dict, can_open: bool = True):
+        strat = self.strategy_for(symbol)
+        if strat is None:
+            return  # stratejisi bilinmeyen sembolde açık pozisyon: SL/TP yönetir
+        tf = self.cfg.trading.timeframe
+        # Önce sadece son barlara bak; tam veri yalnızca yeni bar kapandığında çekilir
+        bar_time = int(self.broker.rates(symbol, tf, 3)["time"].iloc[-1])
         prev = self._last_bar.get(symbol)
         if prev is None:
             self._last_bar[symbol] = bar_time
@@ -239,11 +336,21 @@ class Engine:
         if bar_time <= prev:
             return  # yeni bar yok
 
-        signal = self.strategy.last_signal(df)
-        self._last_signal[symbol] = {"time": bar_time, "signal": signal}
+        df = self.broker.rates(symbol, tf, max(BARS, strat.warmup + 10))
+        bar_time = int(df["time"].iloc[-1])
+        self._close_expired(symbol, strat, bar_time)
+        if not can_open:
+            self._finish_bar(symbol, bar_time)
+            return
+        if len(df) < strat.warmup:
+            self._finish_bar(symbol, bar_time)
+            raise BrokerError(f"Yetersiz veri ({len(df)} bar, en az {strat.warmup} gerekli)")
+
+        signal = strat.last_signal(df)
+        self._last_signal[symbol] = {"time": bar_time, "signal": signal, "strategy": strat.name}
         if signal != 0 and self.running:
             try:
-                self._act(symbol, signal, df, acc)
+                self._act(symbol, signal, df, acc, strat)
             except Exception as e:
                 # Bar "işlendi" sayılmaz, sonraki turda tekrar denenir
                 attempts = self._attempts.get(symbol, 0) + 1
@@ -258,7 +365,20 @@ class Engine:
         self._last_bar[symbol] = bar_time
         self._attempts.pop(symbol, None)
 
-    def _act(self, symbol: str, signal: int, df, acc: dict):
+    def _close_expired(self, symbol: str, strat: Strategy, bar_time: int):
+        """Süre sınırı dolan pozisyonları kapatır (backtest'teki 'time' çıkışı ile aynı)."""
+        hold = strat.max_hold_bars or self.cfg.risk.max_hold_bars
+        if not hold:
+            return
+        tf_sec = TF_SECONDS[self.cfg.trading.timeframe]
+        for p in self.broker.positions(self.cfg.trading.magic):
+            # bar_time son kapanan barın açılışı; şu an ≈ bar_time + tf_sec
+            if p.symbol == symbol and bar_time + tf_sec - p.open_time >= hold * tf_sec:
+                self.broker.close_position(p.ticket)
+                self.event("info", f"{symbol} #{p.ticket} süresi doldu ({hold} bar), kapatıldı "
+                                   f"(kâr/zarar: {p.profit:.2f})", notify=True)
+
+    def _act(self, symbol: str, signal: int, df, acc: dict, strat: Strategy):
         side_txt = "AL" if signal > 0 else "SAT"
         magic = self.cfg.trading.magic
         mine = [p for p in self.broker.positions(magic) if p.symbol == symbol]
@@ -285,9 +405,9 @@ class Engine:
             self.event("warn", f"{symbol} {side_txt} sinyali atlandı: maksimum açık pozisyon sayısına ulaşıldı")
             return
 
-        self._open(symbol, signal, df, acc)
+        self._open(symbol, signal, df, acc, strat)
 
-    def _open(self, symbol: str, side: int, df, acc: dict):
+    def _open(self, symbol: str, side: int, df, acc: dict, strat: Strategy):
         r = self.cfg.risk
         info = self.broker.symbol_info(symbol)
         atr_value = float(ind.atr(df, r.atr_period).iloc[-1])
@@ -300,7 +420,7 @@ class Engine:
             self.event("warn", f"{symbol} {side_txt} atlandı: risk ayarına göre lot, minimum lottan küçük")
             return
         ticket = self.broker.open_position(symbol, side, volume, sl, tp, self.cfg.trading.magic,
-                                           comment=f"gcmbot {self.strategy.name}")
+                                           comment=f"gcmbot {strat.name}")
         self.event("info", f"{symbol} {side_txt} {volume} lot @ {entry} | SL {sl} TP {tp} (#{ticket})",
                    notify=True)
 
@@ -317,7 +437,23 @@ class Engine:
             "day_start_equity": round(self._day_start_equity, 2),
             "trading": self.cfg.trading.model_dump(),
             "risk": self.cfg.risk.model_dump(),
-            "strategy_title": self.strategy.title,
+            "strategy_title": "Öğrenen bot (sembol başına strateji)" if self.auto else self.strategy.title,
+            "active_symbols": self.active_symbols(),
             # Kopya: motor thread'i sözlüğü değiştirirken JSON'a çevrilmesin
             "last_signals": dict(self._last_signal),
+            "learning": self.learning_status(),
+        }
+
+    def learning_status(self) -> dict:
+        lr = self.learned or {}
+        return {
+            "enabled": self.auto,
+            "running": self.learning_running,
+            "progress": self.learning_progress,
+            "settings": self.cfg.learning.model_dump(),
+            "time": lr.get("time"),
+            "timeframe": lr.get("timeframe"),
+            "summary": lr.get("summary"),
+            "symbols_researched": lr.get("symbols_researched"),
+            "assignments": lr.get("assignments", {}),
         }

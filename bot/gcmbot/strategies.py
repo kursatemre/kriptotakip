@@ -36,6 +36,11 @@ class Strategy:
         """Sinyal üretmek için gereken minimum bar sayısı."""
         return max(int(v) for v in self.params.values()) + 5
 
+    @property
+    def max_hold_bars(self) -> int:
+        """Pozisyonun en fazla kaç bar tutulacağı (0 = süre sınırı yok, SL/TP/ters sinyal)."""
+        return 0
+
     def signals(self, df: pd.DataFrame) -> pd.Series:
         raise NotImplementedError
 
@@ -138,8 +143,51 @@ class BollingerReversion(Strategy):
         return _to_signal(_cross_up(c, lower), _cross_down(c, upper))
 
 
+class Rsi2Reversion(Strategy):
+    name = "rsi2_reversion"
+    title = "RSI(2) Ortalamaya Dönüş"
+    description = (
+        "Uzun vadeli trend yönünde, çok kısa vadeli aşırı satım/alımdan dönüş (Connors). "
+        "Fiyat trend ortalamasının üstündeyken RSI(2) çok düşükse AL, altındayken çok yüksekse SAT; "
+        "pozisyon en fazla 'hold' bar tutulur."
+    )
+    default_params = {"low": 10, "high": 90, "trend": 200, "hold": 10}
+    param_grid = {"low": [5, 10], "high": [90, 95], "trend": [200], "hold": [5, 10]}
+
+    @property
+    def max_hold_bars(self):
+        return self.params["hold"]
+
+    def signals(self, df):
+        c = df["close"]
+        r = ind.rsi(c, 2)
+        trend = ind.sma(c, self.params["trend"])
+        return _to_signal((r < self.params["low"]) & (c > trend), (r > self.params["high"]) & (c < trend))
+
+
+class TimeSeriesMomentum(Strategy):
+    name = "tsmom"
+    title = "Zaman Serisi Momentumu"
+    description = (
+        "Son N barın getirisi negatiften pozitife dönerse AL, pozitiften negatife dönerse SAT "
+        "(yavaş trend takibi)."
+    )
+    default_params = {"lookback": 72}
+    param_grid = {"lookback": [24, 72, 168]}
+
+    def signals(self, df):
+        c = df["close"]
+        mom = c - c.shift(self.params["lookback"])
+        zero = pd.Series(0.0, index=c.index)
+        return _to_signal(_cross_up(mom, zero), _cross_down(mom, zero))
+
+
+# ml.py Strategy'yi buradan aldığı için sınıflar tanımlandıktan sonra içe aktarılır
+from .ml import MLBoost  # noqa: E402
+
 STRATEGIES: dict[str, type[Strategy]] = {
-    cls.name: cls for cls in (EmaTrend, RsiPullback, DonchianBreakout, BollingerReversion)
+    cls.name: cls for cls in (EmaTrend, RsiPullback, DonchianBreakout, BollingerReversion,
+                              Rsi2Reversion, TimeSeriesMomentum, MLBoost)
 }
 
 

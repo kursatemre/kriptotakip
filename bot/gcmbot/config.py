@@ -70,6 +70,20 @@ class RiskSettings(BaseModel):
     atr_period: int = Field(14, ge=2)
     max_open_positions: int = Field(3, ge=1)
     max_daily_loss_pct: float = Field(3.0, gt=0, le=50)
+    # Pozisyon bu kadar bar sonra kapatılır (0 = kapalı); strateji kendi süresini belirleyebilir
+    max_hold_bars: int = Field(0, ge=0)
+
+
+class LearningSettings(BaseModel):
+    # True: bot her sembol için stratejiyi kendisi seçer ve sadece saklı testi geçen sembollerde
+    # işlem yapar (trading.symbols/strategy kullanılmaz). False: elle seçilen strateji.
+    enabled: bool = False
+    # Araştırılacak semboller; boşsa hesaptaki tüm semboller
+    universe: list[str] = Field(default_factory=list)
+    every_days: float = Field(7.0, gt=0)
+    use_ml: bool = True
+    # spread / ATR oranı bundan büyük olan semboller elenir (spread kârı yer)
+    max_cost_ratio: float = Field(0.2, gt=0)
 
 
 class CryptoSettings(BaseModel):
@@ -97,6 +111,7 @@ class Config(BaseModel):
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     trading: TradingSettings = Field(default_factory=TradingSettings)
     risk: RiskSettings = Field(default_factory=RiskSettings)
+    learning: LearningSettings = Field(default_factory=LearningSettings)
     crypto: CryptoSettings = Field(default_factory=CryptoSettings)
 
 

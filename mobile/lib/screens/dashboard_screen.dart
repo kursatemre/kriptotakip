@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../widgets.dart';
+import 'learning_card.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key, required this.api});
@@ -63,6 +64,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _setLearning(bool on) async {
+    if (on &&
+        !await confirm(context, 'Öğrenen mod',
+            'Bot, elle seçilen strateji yerine her sembol için kendi seçtiği stratejiyle ve sadece '
+            'testi geçen sembollerde işlem yapacak. Henüz öğrenme yapılmadıysa hemen başlar '
+            '(tüm sembollerin verisi indirileceği için uzun sürebilir). Devam edilsin mi?')) {
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final s = await widget.api.saveSettings(learning: {'enabled': on});
+      if (mounted) setState(() => _status = s);
+    } catch (e) {
+      if (mounted) showError(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _learnNow() async {
+    try {
+      final r = await widget.api.learn();
+      if (mounted) {
+        showInfo(context, r['started'] == true ? 'Öğrenme başladı' : 'Öğrenme zaten çalışıyor');
+      }
+      _refresh();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
   Future<void> _closeAll() async {
     if (!await confirm(context, 'Tümünü kapat', 'Botun açtığı TÜM pozisyonlar kapatılacak.')) return;
     try {
@@ -90,6 +122,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final equity = acc['equity'] as num;
     final dayStart = s['day_start_equity'] as num;
     final signals = (s['last_signals'] as Map<String, dynamic>);
+    final learning = s['learning'] as Map<String, dynamic>;
+    final auto = learning['enabled'] == true;
+    final activeSymbols = (s['active_symbols'] as List).cast<String>();
 
     return RefreshIndicator(
       onRefresh: _refresh,
@@ -110,7 +145,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('${s['strategy_title']}', style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 4),
-            Text('${(trading['symbols'] as List).join(', ')} • ${trading['timeframe']}'),
+            Text(auto
+                ? (activeSymbols.isEmpty
+                    ? 'Testi geçen sembol yok: bot işlem açmayacak • ${trading['timeframe']}'
+                    : '${activeSymbols.join(', ')} • ${trading['timeframe']}')
+                : '${(trading['symbols'] as List).join(', ')} • ${trading['timeframe']}'),
             if ((s['last_check'] as int) > 0)
               Text('Son kontrol: ${dateTime(s['last_check'])}',
                   style: Theme.of(context).textTheme.bodySmall),
@@ -139,6 +178,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ]),
         ),
+        LearningCard(learning: learning, busy: _busy, onToggle: _setLearning, onLearn: _learnNow),
         SectionCard(
           title: 'Hesap',
           trailing: Chip(label: Text(acc['is_demo'] == true ? 'DEMO' : 'GERÇEK')),

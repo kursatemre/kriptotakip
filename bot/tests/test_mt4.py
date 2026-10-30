@@ -23,11 +23,11 @@ class FakeEA(threading.Thread):
 
     def handle(self, cmd, args):
         if cmd == "ping":
-            return ["1"]
+            return ["2"]
         if cmd == "account":
             return [f"104250115|{self.server}|Deneme|USD|100|10000.00|9990.50|12.00|9978.50|{self.demo_flag}|1"]
         if cmd == "symbol_info":
-            return [f"{args[0]}|0.00001|5|0.00001|1.0|0.01|100|0.01|10"]
+            return [f"{args[0]}|0.00001|5|0.00001|1.0|0.01|100|0.01|10|-6.5|1.2|0"]
         if cmd == "rates":
             return [f"{3600 * i}|1.1|1.2|1.0|1.15|10" for i in range(int(args[2]))]
         if cmd == "price":
@@ -44,24 +44,29 @@ class FakeEA(threading.Thread):
         raise ValueError(f"#{args[0]} numarali acik pozisyon bulunamadi")
 
     def run(self):
-        req, work = self.dir / "req.txt", self.dir / "work.txt"
-        resp, tmp = self.dir / "resp.txt", self.dir / "resp.tmp"
         while not self.stop.is_set():
-            try:
-                os.replace(req, work)  # EA de önce taşır
-            except (FileNotFoundError, PermissionError):
+            reqs = list(self.dir.glob("req_*.txt"))
+            if not reqs:
                 time.sleep(0.005)
                 continue
-            f = work.read_text(encoding=ENCODING).strip().split("|")
-            work.unlink()
-            self.seen.append(f[2:])
-            time.sleep(self.delay)
-            try:
-                lines, head = self.handle(f[2], f[3:]), f"{f[0]}|OK"
-            except ValueError as e:
-                lines, head = [], f"{f[0]}|ERR|{e}"
-            tmp.write_text("\n".join([head, *lines]) + "\n", encoding=ENCODING)
-            os.replace(tmp, resp)
+            for req in reqs:
+                client = req.name[4:-4]
+                work = self.dir / f"work_{client}.txt"
+                try:
+                    os.replace(req, work)  # EA de önce taşır
+                except (FileNotFoundError, PermissionError):
+                    continue
+                f = work.read_text(encoding=ENCODING).strip().split("|")
+                work.unlink()
+                self.seen.append(f[2:])
+                time.sleep(self.delay)
+                try:
+                    lines, head = self.handle(f[2], f[3:]), f"{f[0]}|OK"
+                except ValueError as e:
+                    lines, head = [], f"{f[0]}|ERR|{e}"
+                tmp = self.dir / f"resp_{client}.tmp"
+                tmp.write_text("\n".join([head, *lines]) + "\n", encoding=ENCODING)
+                os.replace(tmp, self.dir / f"resp_{client}.txt")
 
 
 @pytest.fixture
@@ -84,6 +89,7 @@ def test_account_and_symbol_info(tmp_path, ea):
     assert acc["equity"] == pytest.approx(9990.5)
     info = b.symbol_info("EURUSD")
     assert info.digits == 5 and info.tick_value == 1.0 and info.volume_step == 0.01 and info.stops_level == 10
+    assert info.swap_long == -6.5 and info.swap_short == 1.2 and info.swap_type == 0
 
 
 def test_demo_detected_from_server_name(tmp_path, ea):
@@ -123,7 +129,7 @@ def test_no_ea_withdraws_request(tmp_path):
     with pytest.raises(BrokerError, match="yanıt vermiyor"):
         b.open_position("EURUSD", 1, 0.1, 1.0, 1.2, MAGIC)
     # İstek geri çekildi: EA sonradan açılsa bile bu emri görmez
-    assert not (tmp_path / "req.txt").exists()
+    assert not list(tmp_path.glob("req_*"))
 
 
 def test_waits_while_ea_is_processing(tmp_path):
@@ -135,12 +141,33 @@ def test_waits_while_ea_is_processing(tmp_path):
         slow.stop.set()
 
 
-def test_connect_discards_stale_request(tmp_path):
-    (tmp_path / "req.txt").write_text("eski|0|open|EURUSD|1|1|0|0|1|x\n")
+def test_connect_discards_stale_files_of_crashed_clients(tmp_path):
+    stale = tmp_path / "req_olu.txt"
+    stale.write_text("1|0|open|EURUSD|1|1|0|0|1|x\n")
+    os.utime(stale, (time.time() - 600, time.time() - 600))
+    fresh = tmp_path / "req_canli.txt"  # çalışan başka bir istemcinin isteği: dokunulmaz
+    fresh.write_text("1|0|ping\n")
     b = make(tmp_path)
-    b._call = lambda *a: [["1"]]
+    b._call = lambda *a: [["2"]]
     b.connect()
-    assert not (tmp_path / "req.txt").exists()
+    assert not stale.exists() and fresh.exists()
+
+
+def test_two_clients_share_bridge_without_mixing(tmp_path, ea):
+    bot, research = make(tmp_path), make(tmp_path)
+    results = {}
+
+    def work(name, fn):
+        results[name] = [fn() for _ in range(20)]
+
+    threads = [threading.Thread(target=work, args=("bot", lambda: bot.price("EURUSD"))),
+               threading.Thread(target=work, args=("arastirma", lambda: research.find_symbols("eur")))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert all(r == (1.08, 1.08012) for r in results["bot"])
+    assert all(r == ["EURUSD", "EURUSDm"] for r in results["arastirma"])
 
 
 def test_find_symbols(tmp_path, ea):

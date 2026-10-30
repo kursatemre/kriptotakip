@@ -2,10 +2,11 @@
 //| GcmBotBridge.mq4                                                 |
 //| Python botu (bot/gcmbot/mt4.py) ile MT4 arasindaki kopru.        |
 //|                                                                  |
-//| Python, MT4'un ortak klasorune (Common\Files\gcmbot) req.txt     |
-//| yazar. Bu EA 100 ms'de bir bakar, istegi once work.txt'ye tasir  |
-//| (boylece Python zaman asiminda istegi geri cekebilir), isler ve  |
-//| yaniti resp.txt'ye yazar. Herhangi bir grafige bir kez ekleyin.  |
+//| Her Python istemcisi MT4'un ortak klasorune (Common\Files\gcmbot)|
+//| kendi req_<istemci>.txt dosyasini yazar. Bu EA 100 ms'de bir     |
+//| bakar, istegi once work_<istemci>.txt'ye tasir (boylece Python   |
+//| zaman asiminda istegi geri cekebilir), isler ve yaniti           |
+//| resp_<istemci>.txt'ye yazar. Herhangi bir grafige bir kez ekleyin|
 //|                                                                  |
 //| Istek : <id>|<utc unix zamani>|<komut>|<arg1>|<arg2>...          |
 //|         30 sn'den eski istekler reddedilir (bot cokerse yarim    |
@@ -18,7 +19,7 @@
 
 #include <stdlib.mqh>
 
-#define BRIDGE_VERSION "1"
+#define BRIDGE_VERSION "2"
 #define BRIDGE_DIR     "gcmbot\\"
 
 input int Slippage = 20;   // Izin verilen kayma (point)
@@ -47,17 +48,42 @@ void OnTick()
 
 void OnTimer()
 {
-   // Once tasi: Python zaman asiminda req.txt'yi silebildiyse istegin islenmedigi kesindir
-   if(!FileIsExist(BRIDGE_DIR + "req.txt", FILE_COMMON))
+   // Bekleyen istekleri topla (her istemcinin kendi dosyasi var)
+   string found[];
+   int count = 0;
+   string name;
+   long fh = FileFindFirst(BRIDGE_DIR + "req_*.txt", name, FILE_COMMON);
+   if(fh == INVALID_HANDLE)
       return;
-   if(!FileMove(BRIDGE_DIR + "req.txt", FILE_COMMON, BRIDGE_DIR + "work.txt", FILE_COMMON | FILE_REWRITE))
+   do
+   {
+      ArrayResize(found, count + 1);
+      found[count++] = name;
+   }
+   while(FileFindNext(fh, name));
+   FileFindClose(fh);
+
+   for(int i = 0; i < count; i++)
+   {
+      // "req_<istemci>.txt" -> "<istemci>"
+      string client = StringSubstr(found[i], 4, StringLen(found[i]) - 8);
+      Process(client);
+   }
+}
+
+void Process(string client)
+{
+   string req = BRIDGE_DIR + "req_" + client + ".txt";
+   string work = BRIDGE_DIR + "work_" + client + ".txt";
+   // Once tasi: Python zaman asiminda req dosyasini silebildiyse istegin islenmedigi kesindir
+   if(!FileMove(req, FILE_COMMON, work, FILE_COMMON | FILE_REWRITE))
       return;
-   int h = FileOpen(BRIDGE_DIR + "work.txt", FILE_READ | FILE_TXT | FILE_ANSI | FILE_COMMON);
+   int h = FileOpen(work, FILE_READ | FILE_TXT | FILE_ANSI | FILE_COMMON);
    if(h == INVALID_HANDLE)
       return;
    string line = FileReadString(h);
    FileClose(h);
-   FileDelete(BRIDGE_DIR + "work.txt", FILE_COMMON);
+   FileDelete(work, FILE_COMMON);
 
    string f[];
    int n = StringSplit(line, '|', f);
@@ -71,7 +97,7 @@ void OnTimer()
       err = "Istek eski (" + IntegerToString(age) + " sn), islenmedi. Bilgisayar saatini kontrol edin.";
    else
       Handle(f, n, err);
-   WriteResponse(f[0] + (err == "" ? "|OK" : "|ERR|" + Clean(err)));
+   WriteResponse(client, f[0] + (err == "" ? "|OK" : "|ERR|" + Clean(err)));
 }
 
 //--- yardimcilar ---------------------------------------------------
@@ -105,9 +131,9 @@ string ErrText(int code)
    return IntegerToString(code) + " " + ErrorDescription(code);
 }
 
-void WriteResponse(string head)
+void WriteResponse(string client, string head)
 {
-   string tmp = BRIDGE_DIR + "resp.tmp";
+   string tmp = BRIDGE_DIR + "resp_" + client + ".tmp";
    int h = FileOpen(tmp, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON);
    if(h == INVALID_HANDLE)
    {
@@ -118,7 +144,7 @@ void WriteResponse(string head)
    for(int i = 0; i < g_count; i++)
       FileWriteString(h, g_lines[i] + "\n");
    FileClose(h);
-   if(!FileMove(tmp, FILE_COMMON, BRIDGE_DIR + "resp.txt", FILE_COMMON | FILE_REWRITE))
+   if(!FileMove(tmp, FILE_COMMON, BRIDGE_DIR + "resp_" + client + ".txt", FILE_COMMON | FILE_REWRITE))
       Print("GcmBotBridge: yanit tasinamadi, hata ", GetLastError());
 }
 
@@ -169,6 +195,8 @@ void Handle(string &f[], int n, string &err)
       CmdHistory((int)StringToInteger(Arg(f, n, 3)));
    else if(cmd == "symbols")
       CmdSymbols(Arg(f, n, 3));
+   else if(cmd == "load_history")
+      CmdLoadHistory(Arg(f, n, 3), (int)StringToInteger(Arg(f, n, 4)), err);
    else
       err = "Bilinmeyen komut: " + cmd;
 }
@@ -191,7 +219,33 @@ void CmdSymbolInfo(string sym, string &err)
    AddLine(sym + "|" + Num(MarketInfo(sym, MODE_POINT)) + "|" + IntegerToString((int)MarketInfo(sym, MODE_DIGITS))
            + "|" + Num(MarketInfo(sym, MODE_TICKSIZE)) + "|" + Num(MarketInfo(sym, MODE_TICKVALUE))
            + "|" + Num(MarketInfo(sym, MODE_MINLOT)) + "|" + Num(MarketInfo(sym, MODE_MAXLOT))
-           + "|" + Num(MarketInfo(sym, MODE_LOTSTEP)) + "|" + IntegerToString((int)MarketInfo(sym, MODE_STOPLEVEL)));
+           + "|" + Num(MarketInfo(sym, MODE_LOTSTEP)) + "|" + IntegerToString((int)MarketInfo(sym, MODE_STOPLEVEL))
+           + "|" + Num(MarketInfo(sym, MODE_SWAPLONG)) + "|" + Num(MarketInfo(sym, MODE_SWAPSHORT))
+           + "|" + IntegerToString((int)MarketInfo(sym, MODE_SWAPTYPE)));
+}
+
+// Grafigi acip en basa kaydirir (Home tusu gibi): MT4 sunucudan eski barlari indirir
+void CmdLoadHistory(string sym, int tf, string &err)
+{
+   if(!Select(sym, err))
+      return;
+   long chart = ChartOpen(sym, tf);
+   if(chart == 0)
+   {
+      err = "Grafik acilamadi: " + ErrText(GetLastError());
+      return;
+   }
+   int last = -1, stable = 0;
+   for(int i = 0; i < 40 && stable < 4; i++)
+   {
+      ChartNavigate(chart, CHART_BEGIN, 0);
+      Sleep(400);
+      int bars = iBars(sym, tf);
+      stable = bars == last ? stable + 1 : 0;
+      last = bars;
+   }
+   ChartClose(chart);
+   AddLine(IntegerToString(last));
 }
 
 void CmdRates(string sym, int tf, int count, string &err)
@@ -269,7 +323,7 @@ void CmdSymbols(string text)
       string s = SymbolName(i, false);
       string u = s;
       StringToUpper(u);
-      if(StringFind(u, text) >= 0)
+      if(text == "" || StringFind(u, text) >= 0)
          AddLine(s);
    }
 }
