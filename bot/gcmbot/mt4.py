@@ -108,10 +108,13 @@ class MT4Broker(Broker):
 
     def account(self):
         f = self._call("account")[0]
+        # GCM'nin MT4 demo sunucusu hesabı "demo" olarak işaretlemiyor (IsDemo() false döner).
+        # GCM'de demo sunucusu "GCM-Demo", gerçek sunucular "GCM-Real..." adlıdır.
+        is_demo = f[9] == "1" or "demo" in f[1].lower()
         return {
             "login": int(f[0]), "server": f[1], "name": f[2], "currency": f[3], "leverage": int(f[4]),
             "balance": float(f[5]), "equity": float(f[6]), "margin": float(f[7]),
-            "margin_free": float(f[8]), "is_demo": f[9] == "1",
+            "margin_free": float(f[8]), "is_demo": is_demo,
             "hedging": True,  # MT4 her zaman hedging'dir
             "algo_trading_enabled": f[10] == "1",
         }

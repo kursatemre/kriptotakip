@@ -20,7 +20,7 @@
     "chat_id": ""
   },
   "trading": {
-    "symbols": ["EURUSD", "XAUUSD"],
+    "symbols": ["EURUSD", "GOLD"],
     "timeframe": "H1",
     "strategy": "ema_trend",
     "params": {},

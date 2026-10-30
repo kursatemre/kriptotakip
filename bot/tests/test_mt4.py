@@ -19,12 +19,13 @@ class FakeEA(threading.Thread):
         self.delay = delay
         self.seen = []
         self.stop = threading.Event()
+        self.server, self.demo_flag = "GCM-Demo", "1"
 
     def handle(self, cmd, args):
         if cmd == "ping":
             return ["1"]
         if cmd == "account":
-            return ["104250115|GCM-Demo|Deneme|USD|100|10000.00|9990.50|12.00|9978.50|1|1"]
+            return [f"104250115|{self.server}|Deneme|USD|100|10000.00|9990.50|12.00|9978.50|{self.demo_flag}|1"]
         if cmd == "symbol_info":
             return [f"{args[0]}|0.00001|5|0.00001|1.0|0.01|100|0.01|10"]
         if cmd == "rates":
@@ -83,6 +84,14 @@ def test_account_and_symbol_info(tmp_path, ea):
     assert acc["equity"] == pytest.approx(9990.5)
     info = b.symbol_info("EURUSD")
     assert info.digits == 5 and info.tick_value == 1.0 and info.volume_step == 0.01 and info.stops_level == 10
+
+
+def test_demo_detected_from_server_name(tmp_path, ea):
+    b = make(tmp_path)
+    ea.demo_flag = "0"  # GCM-Demo, MT4'e demo bayrağı göndermiyor
+    assert b.account()["is_demo"] is True
+    ea.server = "GCM-Real2"
+    assert b.account()["is_demo"] is False
 
 
 def test_rates_drop_forming_bar(tmp_path, ea):
