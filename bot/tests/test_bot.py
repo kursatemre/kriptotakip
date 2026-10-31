@@ -356,9 +356,9 @@ def test_step_reconnects_after_account_error():
 def test_auto_mode_trades_only_active_learned_symbols():
     engine, broker = make_engine()
     engine.cfg.learning.enabled = True
-    engine.learned = {"time": 0, "timeframe": "H1", "assignments": {
-        "EURUSD": {"strategy": "donchian_breakout", "params": {"period": 10}, "active": True},
-        "XAUUSD": {"strategy": "donchian_breakout", "params": {"period": 10}, "active": False},
+    engine.learned = {"time": 0, "timeframes": ["H1", "H4", "D1"], "assignments": {
+        "EURUSD": {"timeframe": "H1", "strategy": "donchian_breakout", "params": {"period": 10}, "active": True},
+        "XAUUSD": {"timeframe": "H4", "strategy": "donchian_breakout", "params": {"period": 10}, "active": False},
     }}
     engine._build_strategies()
     assert engine.active_symbols() == ["EURUSD"]
@@ -390,12 +390,50 @@ def test_learner_end_to_end(tmp_path):
     cfg = Config(broker="fake")
     cfg.learning.universe = ["EURUSD", "XAUUSD"]
     cfg.learning.use_ml = False
+    cfg.learning.timeframes = ["H1", "H4"]
     broker = FakeBroker(bar_seconds=None, history_bars=3000)
     out = learner.learn(broker, cfg, tmp_path / "learned.json", data_dir=tmp_path, progress=lambda m: None)
-    assert (tmp_path / "learned.json").exists() and (tmp_path / "EURUSD_H1.parquet").exists()
+    assert (tmp_path / "learned.json").exists() and (tmp_path / "EURUSD_H4.parquet").exists()
     assert out["symbols_researched"] == 2 and set(out["assignments"]) <= {"EURUSD", "XAUUSD"}
+    assert out["timeframes"] == ["H1", "H4"] and set(out["summary"]["by_timeframe"]) == {"H1", "H4"}
     for a in out["assignments"].values():
         assert a["strategy"] in STRATEGIES and "holdout" in a and isinstance(a["active"], bool)
+        assert a["timeframe"] in ("H1", "H4")
+
+
+def test_learner_prefers_passing_timeframe_then_dev_t_stat():
+    from gcmbot.learner import _pick
+    mk = lambda tf, active, t: {"timeframe": tf, "active": active, "dev": {"t_stat": t}}  # noqa: E731
+    assert _pick([mk("H1", False, 5.0), mk("H4", True, 1.0), mk("D1", True, 2.0)])["timeframe"] == "D1"
+    assert _pick([mk("H1", False, 1.0), mk("H4", False, 3.0)])["timeframe"] == "H4"
+
+
+def test_engine_uses_learned_timeframe_per_symbol():
+    engine, broker = make_engine()
+    engine.cfg.learning.enabled = True
+    engine.learned = {"time": 0, "timeframes": ["H1", "D1"], "assignments": {
+        "EURUSD": {"timeframe": "D1", "strategy": "donchian_breakout", "params": {"period": 10}, "active": True}}}
+    engine.cfg.learning.timeframes = ["H1", "D1"]
+    engine._build_strategies()
+    assert engine.timeframe_for("EURUSD") == "D1" and engine.timeframe_for("XAUUSD") == engine.cfg.trading.timeframe
+    asked = []
+    real = broker.rates
+    broker.rates = lambda sym, tf, n: (asked.append(tf), real(sym, tf, n))[1]
+    engine.tick()
+    assert asked and set(asked) == {"D1"}
+    # Ayarlardaki zaman dilimleri değişince eski öğrenme geçersiz
+    engine.cfg.learning.timeframes = ["H4"]
+    assert engine.active_symbols() == [] and engine._learn_due()
+
+
+def test_old_single_timeframe_learned_file_still_loads():
+    engine, _ = make_engine()
+    engine.cfg.learning.enabled = True
+    engine.cfg.learning.timeframes = ["H1"]
+    engine.learned = {"time": 0, "timeframe": "H1", "assignments": {
+        "EURUSD": {"strategy": "donchian_breakout", "params": {"period": 10}, "active": True}}}
+    engine._build_strategies()
+    assert engine.active_symbols() == ["EURUSD"] and engine.timeframe_for("EURUSD") == "H1"
 
 
 def test_daily_start_equity_survives_restart(tmp_path):

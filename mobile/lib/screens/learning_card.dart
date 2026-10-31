@@ -116,7 +116,11 @@ class _LearningCardState extends State<LearningCard> {
       dense: true,
       leading: Icon(isActive ? Icons.check_circle : Icons.remove_circle_outline,
           color: isActive ? profitColor : Colors.grey),
-      title: Text('$symbol • ${_strategyNames[a['strategy']] ?? a['strategy']}'),
+      title: Text([
+        symbol,
+        if (a['timeframe'] != null) a['timeframe'],
+        _strategyNames[a['strategy']] ?? a['strategy'],
+      ].join(' • ')),
       subtitle: Text('Saklı test: ${h['trades']} işlem, PF ${pf ?? '∞'}, '
           'kazanma %${h['win_rate']}'),
       trailing: Text('${avg >= 0 ? '+' : ''}${avg.toStringAsFixed(2)}R',

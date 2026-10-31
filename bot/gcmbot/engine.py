@@ -72,11 +72,15 @@ class Engine:
     def auto(self) -> bool:
         return self.cfg.learning.enabled
 
+    def _learned_timeframes(self) -> list[str]:
+        lr = self.learned or {}
+        return lr.get("timeframes") or ([lr["timeframe"]] if lr.get("timeframe") else [])
+
     def _assignments(self) -> dict:
-        lr = self.learned
-        if not lr or lr.get("timeframe") != self.cfg.trading.timeframe:
+        # Ayarlardaki zaman dilimleri değiştiyse eski öğrenme geçersizdir
+        if set(self._learned_timeframes()) != set(self.cfg.learning.timeframes):
             return {}
-        return lr.get("assignments", {})
+        return self.learned.get("assignments", {})
 
     def _build_strategies(self):
         self.strategies = {}
@@ -95,6 +99,13 @@ class Engine:
     def strategy_for(self, symbol: str) -> Strategy | None:
         return self.strategies.get(symbol) if self.auto else self.strategy
 
+    def timeframe_for(self, symbol: str) -> str:
+        if self.auto:
+            a = self._assignments().get(symbol)
+            if a:
+                return a.get("timeframe") or self.learned["timeframe"]  # eski learned.json'da ortak
+        return self.cfg.trading.timeframe
+
     def learn_now(self) -> bool:
         """Öğrenmeyi arka planda başlatır; zaten çalışıyorsa False döner."""
         with self._lock:
@@ -111,7 +122,7 @@ class Engine:
         if time.time() - self._last_learn_attempt < LEARN_RETRY_SECONDS:
             return False
         lr = self.learned
-        return (not lr or lr.get("timeframe") != self.cfg.trading.timeframe
+        return (not lr or set(self._learned_timeframes()) != set(self.cfg.learning.timeframes)
                 or time.time() - lr.get("time", 0) > self.cfg.learning.every_days * 86400)
 
     def _learn(self):
@@ -126,6 +137,7 @@ class Engine:
             with self._lock:
                 self.learned = result
                 self._build_strategies()
+                self._reset_bar_tracking()  # zaman dilimi değişen sembollerde bar takibi baştan
             active = self.active_symbols() if self.auto else [
                 s for s, a in result["assignments"].items() if a["active"]]
             self.event("info", f"Öğrenme bitti: {len(active)} sembol işlem için uygun"
@@ -248,7 +260,7 @@ class Engine:
         if self.on_config_change:
             self.on_config_change(self.cfg)
         if self.auto:
-            self.event("info", f"Ayarlar güncellendi: öğrenen mod, {self.cfg.trading.timeframe}, "
+            self.event("info", f"Ayarlar güncellendi: öğrenen mod, {', '.join(self.cfg.learning.timeframes)}, "
                                f"{len(self.active_symbols())} aktif sembol")
         else:
             self.event("info", f"Ayarlar güncellendi: {strategy.title} {strategy.params}, "
@@ -326,7 +338,7 @@ class Engine:
         strat = self.strategy_for(symbol)
         if strat is None:
             return  # stratejisi bilinmeyen sembolde açık pozisyon: SL/TP yönetir
-        tf = self.cfg.trading.timeframe
+        tf = self.timeframe_for(symbol)
         # Önce sadece son barlara bak; tam veri yalnızca yeni bar kapandığında çekilir
         bar_time = int(self.broker.rates(symbol, tf, 3)["time"].iloc[-1])
         prev = self._last_bar.get(symbol)
@@ -338,7 +350,7 @@ class Engine:
 
         df = self.broker.rates(symbol, tf, max(BARS, strat.warmup + 10))
         bar_time = int(df["time"].iloc[-1])
-        self._close_expired(symbol, strat, bar_time)
+        self._close_expired(symbol, strat, bar_time, tf)
         if not can_open:
             self._finish_bar(symbol, bar_time)
             return
@@ -365,12 +377,12 @@ class Engine:
         self._last_bar[symbol] = bar_time
         self._attempts.pop(symbol, None)
 
-    def _close_expired(self, symbol: str, strat: Strategy, bar_time: int):
+    def _close_expired(self, symbol: str, strat: Strategy, bar_time: int, tf: str):
         """Süre sınırı dolan pozisyonları kapatır (backtest'teki 'time' çıkışı ile aynı)."""
         hold = strat.max_hold_bars or self.cfg.risk.max_hold_bars
         if not hold:
             return
-        tf_sec = TF_SECONDS[self.cfg.trading.timeframe]
+        tf_sec = TF_SECONDS[tf]
         for p in self.broker.positions(self.cfg.trading.magic):
             # bar_time son kapanan barın açılışı; şu an ≈ bar_time + tf_sec
             if p.symbol == symbol and bar_time + tf_sec - p.open_time >= hold * tf_sec:
@@ -452,7 +464,7 @@ class Engine:
             "progress": self.learning_progress,
             "settings": self.cfg.learning.model_dump(),
             "time": lr.get("time"),
-            "timeframe": lr.get("timeframe"),
+            "timeframe": ", ".join(self._learned_timeframes()),
             "summary": lr.get("summary"),
             "symbols_researched": lr.get("symbols_researched"),
             "assignments": lr.get("assignments", {}),

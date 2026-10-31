@@ -37,6 +37,13 @@ class TelegramSettings(BaseModel):
     chat_id: str = ""
 
 
+def check_timeframe(v: str) -> str:
+    v = v.upper()
+    if v not in TIMEFRAMES:
+        raise ValueError(f"Geçersiz zaman dilimi: {v}. Mevcut: {', '.join(TIMEFRAMES)}")
+    return v
+
+
 class TradingSettings(BaseModel):
     symbols: list[str] = Field(default_factory=lambda: ["EURUSD"])
     timeframe: str = "H1"
@@ -49,10 +56,7 @@ class TradingSettings(BaseModel):
     @field_validator("timeframe")
     @classmethod
     def _tf(cls, v):
-        v = v.upper()
-        if v not in TIMEFRAMES:
-            raise ValueError(f"Geçersiz zaman dilimi: {v}. Mevcut: {', '.join(TIMEFRAMES)}")
-        return v
+        return check_timeframe(v)
 
     @field_validator("symbols")
     @classmethod
@@ -80,10 +84,17 @@ class LearningSettings(BaseModel):
     enabled: bool = False
     # Araştırılacak semboller; boşsa hesaptaki tüm semboller
     universe: list[str] = Field(default_factory=list)
+    # Her sembol için bu zaman dilimlerinin hepsi denenir, saklı testi geçen en iyisi seçilir
+    timeframes: list[str] = Field(default_factory=lambda: ["H1", "H4", "D1"], min_length=1)
     every_days: float = Field(7.0, gt=0)
     use_ml: bool = True
     # spread / ATR oranı bundan büyük olan semboller elenir (spread kârı yer)
     max_cost_ratio: float = Field(0.2, gt=0)
+
+    @field_validator("timeframes")
+    @classmethod
+    def _timeframes(cls, v):
+        return list(dict.fromkeys(check_timeframe(t) for t in v))
 
 
 class CryptoSettings(BaseModel):
