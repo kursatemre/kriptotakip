@@ -186,7 +186,8 @@ def research_cmd(args):
     from gcmbot import data, research
 
     names = args.symbols or sorted(data.load_symbols())
-    rep = research.run(names, args.timeframe.upper(), include_ml=not args.no_ml, max_cost_ratio=args.max_cost)
+    rep = research.run(names, args.timeframe.upper(), include_ml=not args.no_ml, max_cost_ratio=args.max_cost,
+                       max_loss_prob=args.max_loss_prob)
     s = rep["summary"]
     print(f"\n{s['symbols']} sembol araştırıldı ({rep['candidates']} aday/sembol), "
           f"{len(rep['skipped'])} sembol atlandı (veri yok / maliyet yüksek).")
@@ -229,6 +230,8 @@ def main():
     r.add_argument("--timeframe", default="H1")
     r.add_argument("--no-ml", action="store_true", help="makine öğrenmesi stratejisini atla (hızlı)")
     r.add_argument("--max-cost", type=float, default=0.2, help="en fazla spread/ATR oranı")
+    r.add_argument("--max-loss-prob", type=float, default=100.0,
+                   help="saklı test Monte Carlo zarar ihtimali üst sınırı (%%, 100 = kapalı)")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

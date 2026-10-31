@@ -83,6 +83,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _setStrict(bool on) async {
+    if (on &&
+        !await confirm(context, 'Sıkı mod',
+            'Sadece Monte Carlo zarar ihtimali %10 altında olan semboller aktif olur. Şu anki '
+            'sonuçlarla bu şartı geçen sembol olmayabilir; o zaman bot işlem açmaz. Devam edilsin mi?')) {
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final s = await widget.api.saveSettings(learning: {'max_loss_prob_pct': on ? 10 : 100});
+      if (mounted) setState(() => _status = s);
+    } catch (e) {
+      if (mounted) showError(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _learnNow() async {
     try {
       final r = await widget.api.learn();
@@ -187,7 +205,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         LearningCard(
             learning: learning,
             riskPct: (s['risk'] as Map<String, dynamic>)['risk_per_trade_pct'] as num,
-            busy: _busy, onToggle: _setLearning, onLearn: _learnNow),
+            busy: _busy,
+            onStrict: _setStrict, onToggle: _setLearning, onLearn: _learnNow),
         SectionCard(
           title: 'Hesap',
           trailing: Chip(label: Text(acc['is_demo'] == true ? 'DEMO' : 'GERÇEK')),

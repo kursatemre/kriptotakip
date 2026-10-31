@@ -7,7 +7,8 @@ Her sembol için:
    test diye ayrılır. Sonuçlar R cinsindendir (1R = riske edilen tutar), spread ve swap dahil.
 3. Geliştirme dönemi 4 parçaya bölünür. Aday ancak en az 3 parçada kârlıysa ve yeterli
    işlem yaptıysa seçilebilir; uygun olanlardan t-istatistiği en yüksek olan seçilir.
-4. Seçilen aday saklı testte bir kez ölçülür. Geçme şartı: yeterli işlem ve PF eşiği.
+4. Seçilen aday saklı testte bir kez ölçülür. Geçme şartı: yeterli işlem, PF eşiği ve
+   (istenirse) Monte Carlo zarar ihtimalinin `max_loss_prob` yüzdesini aşmaması.
 5. Monte Carlo: saklı test işlemleri yeniden örneklenir; zarar olasılığı, kötü senaryodaki düşüş
    ve hiç üstünlük yokken eşiği şans eseri geçme olasılığı hesaplanır.
 
@@ -81,13 +82,21 @@ def _pf(rs: np.ndarray) -> np.ndarray:
     return np.divide(gains, losses, out=np.full(gains.shape, np.inf), where=losses > 0)
 
 
-def monte_carlo(rs, runs: int = MC_RUNS, seed: int = 0) -> dict:
+def _loss_prob_approx(rs: np.ndarray) -> np.ndarray:
+    """Bootstrap zarar ihtimalinin normal yaklaşımı (satır başına, yüzde): Φ(-t)."""
+    n = rs.shape[-1]
+    sd = rs.std(axis=-1, ddof=1)
+    t = np.divide(rs.mean(axis=-1) * math.sqrt(n), sd, out=np.zeros(sd.shape), where=sd > 0)
+    return 50 * np.vectorize(math.erfc)(t / math.sqrt(2))
+
+
+def monte_carlo(rs, runs: int = MC_RUNS, seed: int = 0, max_loss_prob: float = 100.0) -> dict:
     """İşlemleri yerine koyarak yeniden örnekler (bootstrap).
 
     loss_prob: ortalama R'nin ≤ 0 çıktığı senaryoların yüzdesi.
     dd_p95_r: senaryoların %95'inde aşılmayan en büyük düşüş (R; %1 riskle ≈ hesabın yüzdesi).
     luck_pass_prob: işlemler ortalaması 0 olacak şekilde kaydırıldığında (yani hiç üstünlük yokken)
-    saklı test eşiğini (işlem sayısı + PF) geçen senaryoların yüzdesi.
+    saklı test eşiğini (işlem sayısı + PF + zarar ihtimali) geçen senaryoların yüzdesi.
     """
     rs = np.asarray(rs, dtype=float)
     n = len(rs)
@@ -96,7 +105,9 @@ def monte_carlo(rs, runs: int = MC_RUNS, seed: int = 0) -> dict:
     boot = rs[np.random.default_rng(seed).integers(0, n, size=(runs, n))]
     cum = np.cumsum(boot, axis=1)
     dd = (np.maximum.accumulate(np.maximum(cum, 0), axis=1) - cum).max(axis=1)
-    luck = n >= MIN_HOLDOUT_TRADES and _pf(boot - rs.mean()) >= MIN_HOLDOUT_PF
+    null = boot - rs.mean()
+    luck = n >= MIN_HOLDOUT_TRADES and (_pf(null) >= MIN_HOLDOUT_PF) & (
+        _loss_prob_approx(null) <= max_loss_prob if max_loss_prob < 100 else True)
     return {
         "runs": runs,
         "loss_prob": round(float((boot.mean(axis=1) <= 0).mean() * 100), 1),
@@ -124,7 +135,7 @@ def cost_settings(meta: dict, price: float = 0.0, sl_atr_mult: float = 1.5,
 
 
 def evaluate_symbol(df: pd.DataFrame, meta: dict, cands: list[tuple[str, dict]],
-                    holdout_frac: float = HOLDOUT_FRAC) -> dict:
+                    holdout_frac: float = HOLDOUT_FRAC, max_loss_prob: float = 100.0) -> dict:
     df = df.reset_index(drop=True)
     times = df["time"].to_numpy()
     split_time = int(times[int(len(df) * (1 - holdout_frac))])
@@ -154,9 +165,10 @@ def evaluate_symbol(df: pd.DataFrame, meta: dict, cands: list[tuple[str, dict]],
     best = max(eligible, key=lambda r: r["dev"]["t_stat"]) if eligible else None
     if best:
         best["hold_trades"] = best.pop("_hold")  # [giriş zamanı, R]: portföy Monte Carlo'su için
-        best["mc"] = monte_carlo([r for _, r in best["hold_trades"]])
+        best["mc"] = monte_carlo([r for _, r in best["hold_trades"]], max_loss_prob=max_loss_prob)
     passed = bool(best) and best["holdout"]["trades"] >= MIN_HOLDOUT_TRADES and (
-        best["holdout"]["pf"] is None or best["holdout"]["pf"] >= MIN_HOLDOUT_PF)
+        best["holdout"]["pf"] is None or best["holdout"]["pf"] >= MIN_HOLDOUT_PF) and (
+        best["mc"]["loss_prob"] <= max_loss_prob)
     years = (times[-1] - split_time) / (365.25 * 86400)
     return {
         "bars": len(df), "from": int(times[0]), "split": split_time, "to": int(times[-1]),
@@ -173,7 +185,7 @@ def cost_ratio(meta: dict, timeframe: str) -> float:
 
 
 def run(symbols: list[str], timeframe: str, include_ml: bool = True, max_cost_ratio: float = 0.2,
-        data_dir: Path = data.DATA_DIR, progress=print) -> dict:
+        max_loss_prob: float = 100.0, data_dir: Path = data.DATA_DIR, progress=print) -> dict:
     metas = data.load_symbols(data_dir)
     cands = candidates(include_ml)
     results, skipped = {}, {}
@@ -187,13 +199,13 @@ def run(symbols: list[str], timeframe: str, include_ml: bool = True, max_cost_ra
             skipped[symbol] = f"maliyet yüksek (spread/ATR {ratio:.2f})"
             continue
         t0 = time.time()
-        res = evaluate_symbol(df, meta, cands)
+        res = evaluate_symbol(df, meta, cands, max_loss_prob=max_loss_prob)
         res["cost_ratio"] = round(ratio, 3)
         results[symbol] = res
         b = res["best"]
         progress(f"[{i}/{len(symbols)}] {symbol}: {res['bars']} bar, {res['eligible']}/{res['candidates']} uygun aday"
                  + (f", seçilen {b['strategy']} → saklı test {b['holdout']['trades']} işlem, "
-                    f"PF {b['holdout']['pf']}, ort {b['holdout']['avg_r']:+.3f}R"
+                    f"PF {b['holdout']['pf']}, ort {b['holdout']['avg_r']:+.3f}R, zarar ihtimali %{b['mc']['loss_prob']}"
                     f" {'GEÇTİ' if res['passed'] else 'kaldı'}" if b else ", uygun aday yok")
                  + f" ({time.time() - t0:.0f} sn)")
     report = {"timeframe": timeframe, "created": int(time.time()), "candidates": len(cands),

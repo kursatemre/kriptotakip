@@ -21,6 +21,7 @@ class LearningCard extends StatefulWidget {
     required this.riskPct,
     required this.busy,
     required this.onToggle,
+    required this.onStrict,
     required this.onLearn,
   });
 
@@ -28,6 +29,7 @@ class LearningCard extends StatefulWidget {
   final num riskPct;
   final bool busy;
   final ValueChanged<bool> onToggle;
+  final ValueChanged<bool> onStrict;
   final VoidCallback onLearn;
 
   @override
@@ -54,6 +56,8 @@ class _LearningCardState extends State<LearningCard> {
     final small = Theme.of(context).textTheme.bodySmall;
     final mc = summary?['monte_carlo'] as Map<String, dynamic>?;
     final luck = summary?['luck_expected_active'] as num?;
+    final settings = l['settings'] as Map<String, dynamic>? ?? {};
+    final strict = (settings['max_loss_prob_pct'] as num? ?? 100) < 100;
 
     return SectionCard(
       title: 'Öğrenen bot',
@@ -106,6 +110,19 @@ class _LearningCardState extends State<LearningCard> {
             padding: EdgeInsets.only(bottom: 8),
             child: Text('Henüz öğrenme yapılmadı.'),
           ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('Sıkı mod'),
+          subtitle: Text(
+            strict
+                ? 'Sadece zarar ihtimali %${settings['max_loss_prob_pct']} altındaki semboller'
+                : 'Kapalı: saklı testi geçen her sembol işlem yapar',
+            style: small,
+          ),
+          value: strict,
+          onChanged: widget.busy ? null : widget.onStrict,
+        ),
         SizedBox(
           width: double.infinity,
           child: OutlinedButton.icon(

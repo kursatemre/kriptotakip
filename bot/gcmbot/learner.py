@@ -42,7 +42,7 @@ def learn(broker: Broker, cfg: Config, path: Path | None = LEARNED_PATH, data_di
         data.download(broker, universe, tf, data_dir=data_dir, progress=progress)
         progress(f"Araştırma çalışıyor ({tf})")
         report = research.run(universe, tf, include_ml=lc.use_ml, max_cost_ratio=lc.max_cost_ratio,
-                              data_dir=data_dir, progress=progress)
+                              max_loss_prob=lc.max_loss_prob_pct, data_dir=data_dir, progress=progress)
         summaries[tf] = report["summary"]
         researched |= set(report["results"])
         for symbol, res in report["results"].items():
@@ -64,7 +64,7 @@ def learn(broker: Broker, cfg: Config, path: Path | None = LEARNED_PATH, data_di
     for a in assignments.values():
         del a["hold_trades"]
     learned = {
-        "time": int(time.time()), "timeframes": list(lc.timeframes),
+        "time": int(time.time()), "timeframes": list(lc.timeframes), "max_loss_prob_pct": lc.max_loss_prob_pct,
         "summary": {
             "passed": sorted(s for s, a in assignments.items() if a["active"]),
             "holdout_trades": trades,

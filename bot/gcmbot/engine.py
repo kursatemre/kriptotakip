@@ -99,7 +99,9 @@ class Engine:
         """Yeni işlem açılabilecek semboller."""
         if not self.auto:
             return list(self.cfg.trading.symbols)
-        return [s for s, a in self._assignments().items() if a.get("active") and s in self.strategies]
+        limit = self.cfg.learning.max_loss_prob_pct  # sıkı mod yeniden öğrenmeyi beklemeden uygulanır
+        return [s for s, a in self._assignments().items()
+                if a.get("active") and s in self.strategies and a.get("mc", {}).get("loss_prob", 0) <= limit]
 
     def strategy_for(self, symbol: str) -> Strategy | None:
         return self.strategies.get(symbol) if self.auto else self.strategy
@@ -128,6 +130,7 @@ class Engine:
             return False
         lr = self.learned
         return (not lr or set(self._learned_timeframes()) != set(self.cfg.learning.timeframes)
+                or lr.get("max_loss_prob_pct", 100.0) != self.cfg.learning.max_loss_prob_pct
                 or time.time() - lr.get("time", 0) > self.cfg.learning.every_days * 86400)
 
     def _learn(self):
@@ -476,8 +479,11 @@ class Engine:
         bid, ask = self.broker.price(symbol)
         entry = ask if side > 0 else bid
         sl, tp = stop_levels(side, entry, atr_value, r.sl_atr_mult, r.tp_atr_mult, info)
-        volume = position_size(acc["equity"], r.risk_per_trade_pct, abs(entry - sl), info)
         side_txt = "AL" if side > 0 else "SAT"
+        if info.tick_value <= 0:  # MT4 bazı çapraz kurlarda piyasa kapalıyken 0 döndürür
+            self.event("warn", f"{symbol} {side_txt} atlandı: kontrat değeri (tick value) alınamadı, lot hesaplanamıyor")
+            return
+        volume = position_size(acc["equity"], r.risk_per_trade_pct, abs(entry - sl), info)
         if volume <= 0:
             self.event("warn", f"{symbol} {side_txt} atlandı: risk ayarına göre lot, minimum lottan küçük")
             return

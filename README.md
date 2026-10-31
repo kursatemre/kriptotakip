@@ -154,6 +154,8 @@ Paneldeki **Öğrenen bot** anahtarı açılınca bot elle seçilen strateji yer
    kötü senaryoda (%95) beklenen düşüş ve **hiç üstünlük olmasaydı şans eseri kaç sembolün
    testi geçeceği** görünür. Geçen sembol sayısı bu şans beklentisinden belirgin fazla
    değilse sonuçlar şansla açıklanabilir demektir.
+   **Sıkı mod** (kartta anahtar, `learning.max_loss_prob_pct: 10`) yalnızca zarar ihtimali
+   %10'un altındaki sembolleri aktif yapar; daha az sembol, ama şansla açıklanması daha zor sonuçlar.
 5. Öğrenme `learning.every_days` günde bir (varsayılan 7) kendiliğinden tekrarlanır;
    *Şimdi öğren* ile elle de başlatılabilir.
 

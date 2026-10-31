@@ -96,6 +96,9 @@ class LearningSettings(BaseModel):
     use_ml: bool = True
     # spread / ATR oranı bundan büyük olan semboller elenir (spread kârı yer)
     max_cost_ratio: float = Field(0.2, gt=0)
+    # Sıkı mod: saklı testteki Monte Carlo zarar ihtimali bu yüzdeyi aşan sembol aktif olmaz
+    # (100 = kapalı; ör. 10 yalnızca şansla açıklanması zor sonuçları kabul eder)
+    max_loss_prob_pct: float = Field(100.0, gt=0, le=100)
 
     @field_validator("timeframes")
     @classmethod

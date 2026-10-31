@@ -506,6 +506,24 @@ def test_monte_carlo():
     assert bad["loss_prob"] == 100 and bad["dd_p95_r"] == 30
     assert monte_carlo([1.0] * 10)["luck_pass_prob"] == 0  # eşik için işlem sayısı yetersiz
     assert monte_carlo([])["runs"] == 0
+    # Sıkı mod şans eseri geçme ihtimalini düşürür
+    rs = list(np.random.default_rng(3).normal(0.1, 1.3, 60))
+    assert monte_carlo(rs, max_loss_prob=10)["luck_pass_prob"] < monte_carlo(rs)["luck_pass_prob"]
+
+
+def test_strict_mode_filters_active_symbols_immediately():
+    engine, _ = make_engine()
+    engine.cfg.learning.enabled = True
+    engine.cfg.learning.timeframes = ["H1"]
+    engine.learned = {"time": 9e12, "timeframes": ["H1"], "assignments": {
+        "EURUSD": {"timeframe": "H1", "strategy": "donchian_breakout", "params": {"period": 10}, "active": True,
+                   "mc": {"loss_prob": 25.0}},
+        "XAUUSD": {"timeframe": "H1", "strategy": "donchian_breakout", "params": {"period": 10}, "active": True,
+                   "mc": {"loss_prob": 4.0}}}}
+    engine._build_strategies()
+    assert engine.active_symbols() == ["EURUSD", "XAUUSD"] and not engine._learn_due()
+    engine.apply_settings(learning={"max_loss_prob_pct": 10})
+    assert engine.active_symbols() == ["XAUUSD"] and engine._learn_due()  # şans istatistikleri için yeniden öğren
 
 
 # ------------------------------------------------------------------------ API
