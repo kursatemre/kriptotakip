@@ -149,7 +149,12 @@ Paneldeki **Öğrenen bot** anahtarı açılınca bot elle seçilen strateji yer
    parçasının en az 3'ünde kârlı olmalıdır.
 3. Seçilen strateji saklı dönemde de en az 20 işlemde PF ≥ 1.1 tutturursa sembol **aktif** olur.
    Bot sadece aktif sembollerde işlem açar; sonuçlar *Panel → Öğrenen bot* kartında görünür.
-4. Öğrenme `learning.every_days` günde bir (varsayılan 7) kendiliğinden tekrarlanır;
+   Her sembol için saatlik, 4 saatlik ve günlük grafik (`learning.timeframes`) ayrı ayrı denenir.
+4. **Monte Carlo:** saklı test işlemleri 2000 kez yeniden örneklenir. Kartta zarar ihtimali,
+   kötü senaryoda (%95) beklenen düşüş ve **hiç üstünlük olmasaydı şans eseri kaç sembolün
+   testi geçeceği** görünür. Geçen sembol sayısı bu şans beklentisinden belirgin fazla
+   değilse sonuçlar şansla açıklanabilir demektir.
+5. Öğrenme `learning.every_days` günde bir (varsayılan 7) kendiliğinden tekrarlanır;
    *Şimdi öğren* ile elle de başlatılabilir.
 
 Aynı işlemler komut satırından da yapılabilir:
@@ -174,6 +179,11 @@ birkaç yüzdedir**; "günde %3-5" gibi hedefler hesabı hızla eritecek kadar r
   her turda tekrarlanır: bot çalışırken MT5'te gerçek hesaba geçilirse bot kendini durdurur.
 - **Günlük zarar limiti:** Gün içinde (UTC) varlık %3 (ayarlanabilir) düşerse bot o gün yeni
   işlem açmaz. Gün başı varlık `bot/state.json`'a yazılır, bot yeniden başlatılınca limit sıfırlanmaz.
+- **Zirveden düşüş limiti:** Varlık en yüksek değerinden %20 (`max_drawdown_pct`, 0 = kapalı)
+  düşerse bot yeni işlem açmaz; *Botu başlat*'a tekrar basılınca zirve sıfırlanır ve devam eder.
+- **Üst üste zarar koruması:** Bir sembolde son 5 (`max_consecutive_losses`) işlem zararla
+  kapandıysa o sembolde 48 saat (`loss_pause_hours`) yeni işlem açılmaz. Bu kurallar backtest'te
+  yoktur; canlı sonuçlar bu yüzden backtest'ten biraz farklı olabilir.
 - **Maksimum açık pozisyon** sınırı vardır ve her sembolde en fazla 1 pozisyon açılır.
   "Ters sinyalde kapat" kapalıyken ters sinyal gelirse yeni işlem açılmaz (netting hesapta
   mevcut pozisyonu istemeden kapatmamak için).

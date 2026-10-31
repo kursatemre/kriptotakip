@@ -125,6 +125,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final learning = s['learning'] as Map<String, dynamic>;
     final auto = learning['enabled'] == true;
     final activeSymbols = (s['active_symbols'] as List).cast<String>();
+    final paused = (s['paused_symbols'] as Map<String, dynamic>? ?? {});
+    final drawdown = s['drawdown_pct'] as num? ?? 0;
 
     return RefreshIndicator(
       onRefresh: _refresh,
@@ -134,6 +136,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _banner(Icons.warning_amber, 'DİKKAT: GERÇEK HESAP', lossColor),
         if ((s['halted_reason'] as String).isNotEmpty)
           _banner(Icons.pause_circle, s['halted_reason'], Colors.orange),
+        for (final p in paused.entries)
+          _banner(Icons.hourglass_bottom,
+              '${p.key}: üst üste zarar, ${dateTime(p.value as int)} saatine kadar yeni işlem yok',
+              Colors.orange),
         if ((s['last_error'] as String).isNotEmpty)
           _banner(Icons.error_outline, s['last_error'], lossColor),
         SectionCard(
@@ -147,8 +153,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const SizedBox(height: 4),
             Text(auto
                 ? (activeSymbols.isEmpty
-                    ? 'Testi geçen sembol yok: bot işlem açmayacak • ${trading['timeframe']}'
-                    : '${activeSymbols.join(', ')} • ${trading['timeframe']}')
+                    ? 'Testi geçen sembol yok: bot işlem açmayacak'
+                    : activeSymbols.join(', '))
                 : '${(trading['symbols'] as List).join(', ')} • ${trading['timeframe']}'),
             if ((s['last_check'] as int) > 0)
               Text('Son kontrol: ${dateTime(s['last_check'])}',
@@ -178,7 +184,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ]),
         ),
-        LearningCard(learning: learning, busy: _busy, onToggle: _setLearning, onLearn: _learnNow),
+        LearningCard(
+            learning: learning,
+            riskPct: (s['risk'] as Map<String, dynamic>)['risk_per_trade_pct'] as num,
+            busy: _busy, onToggle: _setLearning, onLearn: _learnNow),
         SectionCard(
           title: 'Hesap',
           trailing: Chip(label: Text(acc['is_demo'] == true ? 'DEMO' : 'GERÇEK')),
@@ -189,6 +198,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             _kv('Açık kâr/zarar', signed(equity - balance), pnlColor(equity - balance)),
             if (dayStart > 0)
               _kv('Bugün', signed(equity - dayStart), pnlColor(equity - dayStart)),
+            if (drawdown > 0)
+              _kv('Zirveden düşüş', '%${drawdown.toStringAsFixed(1)}', lossColor),
             _kv('Serbest teminat', money(acc['margin_free'] as num, cur)),
           ]),
         ),

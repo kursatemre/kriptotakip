@@ -396,9 +396,13 @@ def test_learner_end_to_end(tmp_path):
     assert (tmp_path / "learned.json").exists() and (tmp_path / "EURUSD_H4.parquet").exists()
     assert out["symbols_researched"] == 2 and set(out["assignments"]) <= {"EURUSD", "XAUUSD"}
     assert out["timeframes"] == ["H1", "H4"] and set(out["summary"]["by_timeframe"]) == {"H1", "H4"}
+    assert "monte_carlo" in out["summary"] and out["summary"]["luck_expected_active"] >= 0
+    from gcmbot.data import load_symbols
+    assert {"atr_H1", "atr_H4"} <= set(load_symbols(tmp_path)["EURUSD"])  # sonraki indirme öncekini silmez
     for a in out["assignments"].values():
         assert a["strategy"] in STRATEGIES and "holdout" in a and isinstance(a["active"], bool)
         assert a["timeframe"] in ("H1", "H4")
+        assert "mc" in a and "hold_trades" not in a
 
 
 def test_learner_prefers_passing_timeframe_then_dev_t_stat():
@@ -444,6 +448,64 @@ def test_daily_start_equity_survives_restart(tmp_path):
     restarted, _ = make_engine(state_path=state, broker=broker)
     restarted.tick()
     assert "Günlük zarar" in restarted.halted_reason
+
+
+def losses(symbol, n, t, profit=-10.0):
+    return [{"ticket": i, "time": t - i * 60, "symbol": symbol, "side": "buy", "volume": 0.1, "price": 1.0,
+             "profit": profit} for i in range(n)]
+
+
+def test_consecutive_losses_pause_symbol():
+    import time as _t
+    engine, broker = scripted_engine([1, 1])
+    magic = engine.cfg.trading.magic
+    now = int(_t.time())
+    broker.history = lambda m, days: losses("EURUSD", 5, now) + losses("XAUUSD", 9, now)
+    next_bar(engine, broker)
+    assert broker.positions(magic) == []
+    assert "EURUSD" in engine.status()["paused_symbols"] and "beklemede" in engine.events[0]["message"]
+    # Son işlem kârlıysa seri bozulur
+    broker.history = lambda m, days: losses("EURUSD", 1, now + 60, profit=5.0) + losses("EURUSD", 5, now)
+    next_bar(engine, broker)
+    assert len(broker.positions(magic)) == 1 and engine.status()["paused_symbols"] == {}
+
+
+def test_loss_pause_expires_and_can_be_disabled():
+    engine, broker = make_engine()
+    broker.history = lambda m, days: losses("EURUSD", 6, 1000)  # çok eski zararlar
+    assert engine._loss_pause_until("EURUSD") == 0
+    import time as _t
+    broker.history = lambda m, days: losses("EURUSD", 6, int(_t.time()))
+    assert engine._loss_pause_until("EURUSD") > _t.time()
+    engine.cfg.risk.max_consecutive_losses = 0
+    assert engine._loss_pause_until("EURUSD") == 0
+
+
+def test_drawdown_halt_until_restart(tmp_path):
+    state = tmp_path / "state.json"
+    engine, broker = make_engine(state_path=state)
+    engine.tick()
+    peak = broker.account()["equity"]
+    broker.balance -= peak * 0.25
+    engine.tick()
+    assert engine.halted_reason.startswith("Toplam düşüş") and engine.status()["drawdown_pct"] >= 25
+    # Zirve kalıcıdır: sunucu yeniden başlasa da koruma devam eder
+    restarted, _ = make_engine(state_path=state, broker=broker)
+    restarted.tick()
+    assert restarted.halted_reason.startswith("Toplam düşüş")
+    # Elle başlatma düşüşü kabul eder, zirve sıfırlanır
+    restarted.set_running(True)
+    assert restarted.drawdown_pct() == 0 and not restarted.halted_reason.startswith("Toplam")
+
+
+def test_monte_carlo():
+    from gcmbot.research import monte_carlo
+    good = monte_carlo([2.0, -1.0] * 30)
+    assert good["loss_prob"] < 5 and 0 < good["luck_pass_prob"] < 100
+    bad = monte_carlo([-1.0] * 30)
+    assert bad["loss_prob"] == 100 and bad["dd_p95_r"] == 30
+    assert monte_carlo([1.0] * 10)["luck_pass_prob"] == 0  # eşik için işlem sayısı yetersiz
+    assert monte_carlo([])["runs"] == 0
 
 
 # ------------------------------------------------------------------------ API

@@ -32,6 +32,9 @@ MAX_ATTEMPTS = 3
 TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400}
 # Öğrenme başarısız olursa (ör. bağlantı) en erken bu kadar sonra tekrar denenir
 LEARN_RETRY_SECONDS = 3600
+# Üst üste zarar koruması için bakılan kapanmış işlem geçmişi
+LOSS_HISTORY_DAYS = 90
+DRAWDOWN_HALT = "Toplam düşüş limiti"
 
 
 class Engine:
@@ -60,6 +63,8 @@ class Engine:
         self._symbol_errors: dict[str, str] = {}
         self._day: date | None = None
         self._day_start_equity = 0.0
+        self._peak_equity = 0.0  # düşüş koruması için varlığın en yüksek değeri
+        self._paused: dict[str, int] = {}  # sembol → üst üste zarar sonrası yeniden işlem zamanı
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -179,6 +184,7 @@ class Engine:
             s = json.loads(self.state_path.read_text(encoding="utf-8"))
             day = date.fromisoformat(s["day"])
             equity = float(s["day_start_equity"])
+            self._peak_equity = float(s.get("peak_equity", 0.0))
         except (OSError, ValueError, KeyError, TypeError) as e:
             log.warning("%s okunamadı, yok sayılıyor: %s", self.state_path.name, e)
             return
@@ -190,8 +196,8 @@ class Engine:
             return
         try:
             tmp = self.state_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"day": self._day.isoformat(), "day_start_equity": self._day_start_equity}),
-                           encoding="utf-8")
+            tmp.write_text(json.dumps({"day": self._day.isoformat(), "day_start_equity": self._day_start_equity,
+                                       "peak_equity": self._peak_equity}), encoding="utf-8")
             tmp.replace(self.state_path)
         except OSError as e:
             log.warning("%s yazılamadı: %s", self.state_path.name, e)
@@ -216,6 +222,9 @@ class Engine:
             if running:
                 acc = self.broker.account()
                 self._check_account_allowed(acc)
+                if self.halted_reason.startswith(DRAWDOWN_HALT):
+                    self._peak_equity = acc["equity"]  # elle başlatma düşüşü kabul etmek demek: zirve sıfırlanır
+                    self._save_state()
                 self.halted_reason = ""
                 # Başlatıldığında eski sinyallerle işlem açmamak için mevcut barları "görülmüş" say
                 self._reset_bar_tracking()
@@ -306,6 +315,7 @@ class Engine:
                     self.running = False
                     self.event("error", f"Bot DURDURULDU: {e}", notify=True)
             self._check_daily_loss(acc)
+            self._check_drawdown(acc)
             active = self.active_symbols()
             # Açık pozisyonu olan semboller de izlenir (süre sınırı); pasif sembolde yeni işlem açılmaz
             held = sorted({p.symbol for p in self.broker.positions(self.cfg.trading.magic)})
@@ -333,6 +343,38 @@ class Engine:
         if loss_pct >= limit and not self.halted_reason:
             self.halted_reason = f"Günlük zarar limiti aşıldı (%{loss_pct:.2f} ≥ %{limit}). Yarına kadar yeni işlem yok."
             self.event("warn", self.halted_reason, notify=True)
+
+    def _check_drawdown(self, acc: dict):
+        if acc["equity"] > self._peak_equity:
+            self._peak_equity = acc["equity"]
+            self._save_state()
+        limit = self.cfg.risk.max_drawdown_pct
+        dd = self.drawdown_pct()
+        if limit and dd >= limit and not self.halted_reason.startswith(DRAWDOWN_HALT):
+            self.halted_reason = (f"{DRAWDOWN_HALT} aşıldı (zirveden %{dd:.1f} ≥ %{limit}). Bot yeniden "
+                                  "başlatılana kadar yeni işlem yok.")
+            self.event("warn", self.halted_reason, notify=True)
+
+    def drawdown_pct(self, equity: float | None = None) -> float:
+        if equity is None:
+            equity = self.broker.account()["equity"]
+        return (self._peak_equity - equity) / self._peak_equity * 100 if self._peak_equity > 0 else 0.0
+
+    def _loss_pause_until(self, symbol: str) -> int:
+        """Sembolde son kapanan işlemler üst üste zararlıysa yeniden işlem açılabilecek zaman, değilse 0."""
+        r = self.cfg.risk
+        if not r.max_consecutive_losses:
+            return 0
+        closed = [d for d in self.broker.history(self.cfg.trading.magic, LOSS_HISTORY_DAYS) if d["symbol"] == symbol]
+        streak = 0
+        for d in sorted(closed, key=lambda d: d["time"], reverse=True):
+            if d["profit"] >= 0:
+                break
+            streak += 1
+        if streak < r.max_consecutive_losses:
+            return 0
+        until = int(max(d["time"] for d in closed) + r.loss_pause_hours * 3600)
+        return until if until > time.time() else 0
 
     def _process_symbol(self, symbol: str, acc: dict, can_open: bool = True):
         strat = self.strategy_for(symbol)
@@ -413,6 +455,14 @@ class Engine:
         if self.halted_reason:
             self.event("warn", f"{symbol} {side_txt} sinyali atlandı: {self.halted_reason}")
             return
+        until = self._loss_pause_until(symbol)
+        if until:
+            self._paused[symbol] = until
+            self.event("warn", f"{symbol} {side_txt} sinyali atlandı: üst üste "
+                               f"{self.cfg.risk.max_consecutive_losses}+ zarar, sembol "
+                               f"{datetime.fromtimestamp(until).strftime('%d.%m %H:%M')} saatine kadar beklemede")
+            return
+        self._paused.pop(symbol, None)
         if len(self.broker.positions(magic)) >= self.cfg.risk.max_open_positions:
             self.event("warn", f"{symbol} {side_txt} sinyali atlandı: maksimum açık pozisyon sayısına ulaşıldı")
             return
@@ -447,6 +497,9 @@ class Engine:
             "broker": self.broker.name,
             "account": acc,
             "day_start_equity": round(self._day_start_equity, 2),
+            "peak_equity": round(self._peak_equity, 2),
+            "drawdown_pct": round(self.drawdown_pct(acc["equity"]), 2),
+            "paused_symbols": {s: t for s, t in self._paused.items() if t > time.time()},
             "trading": self.cfg.trading.model_dump(),
             "risk": self.cfg.risk.model_dump(),
             "strategy_title": "Öğrenen bot (sembol başına strateji)" if self.auto else self.strategy.title,

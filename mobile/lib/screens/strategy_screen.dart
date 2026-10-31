@@ -18,6 +18,9 @@ const _riskFields = {
   'tp_atr_mult': 'Take-profit (x ATR)',
   'max_open_positions': 'Maks. açık pozisyon',
   'max_daily_loss_pct': 'Günlük maks. zarar (%)',
+  'max_drawdown_pct': 'Zirveden maks. düşüş (%, 0 = kapalı)',
+  'max_consecutive_losses': 'Üst üste zararda sembolü durdur (adet, 0 = kapalı)',
+  'loss_pause_hours': 'Sembol bekleme süresi (saat)',
 };
 
 class _StrategyScreenState extends State<StrategyScreen> {

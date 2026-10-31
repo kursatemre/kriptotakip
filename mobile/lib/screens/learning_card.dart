@@ -18,12 +18,14 @@ class LearningCard extends StatefulWidget {
   const LearningCard({
     super.key,
     required this.learning,
+    required this.riskPct,
     required this.busy,
     required this.onToggle,
     required this.onLearn,
   });
 
   final Map<String, dynamic> learning;
+  final num riskPct;
   final bool busy;
   final ValueChanged<bool> onToggle;
   final VoidCallback onLearn;
@@ -50,6 +52,8 @@ class _LearningCardState extends State<LearningCard> {
     final active = assignments.where((e) => e.value['active'] == true).length;
     final shown = _showAll ? assignments : assignments.take(8).toList();
     final small = Theme.of(context).textTheme.bodySmall;
+    final mc = summary?['monte_carlo'] as Map<String, dynamic>?;
+    final luck = summary?['luck_expected_active'] as num?;
 
     return SectionCard(
       title: 'Öğrenen bot',
@@ -78,6 +82,23 @@ class _LearningCardState extends State<LearningCard> {
               '$active sembol işlem için uygun • seçilenlerin saklı test ortalaması '
               '${signed(summary['holdout_avg_r'] as num)}R/işlem',
               style: small,
+            ),
+          if (mc != null && (mc['runs'] as num) > 0) ...[
+            const SizedBox(height: 8),
+            Text('Monte Carlo (${mc['runs']} senaryo)', style: Theme.of(context).textTheme.titleSmall),
+            Text(
+              'Zarar ihtimali %${mc['loss_prob']} • kötü senaryoda (%95) düşüş ${mc['dd_p95_r']}R '
+              '≈ hesabın %${((mc['dd_p95_r'] as num) * widget.riskPct).toStringAsFixed(0)}\'i',
+              style: small,
+            ),
+          ],
+          if (luck != null)
+            Text(
+              luck >= active
+                  ? 'Dikkat: hiç üstünlük olmasa da şans eseri ~${luck.toStringAsFixed(1)} sembolün testi '
+                      'geçmesi beklenirdi (geçen: $active). Sonuç şansla açıklanabilir.'
+                  : 'Şans eseri beklenen ~${luck.toStringAsFixed(1)} sembol, geçen $active.',
+              style: small?.copyWith(color: luck >= active ? Colors.orange : null),
             ),
           const SizedBox(height: 8),
         ] else if (!running)
@@ -111,6 +132,7 @@ class _LearningCardState extends State<LearningCard> {
     final isActive = a['active'] == true;
     final avg = h['avg_r'] as num;
     final pf = h['pf'];
+    final mc = a['mc'] as Map<String, dynamic>?;
     return ListTile(
       contentPadding: EdgeInsets.zero,
       dense: true,
@@ -122,7 +144,7 @@ class _LearningCardState extends State<LearningCard> {
         _strategyNames[a['strategy']] ?? a['strategy'],
       ].join(' • ')),
       subtitle: Text('Saklı test: ${h['trades']} işlem, PF ${pf ?? '∞'}, '
-          'kazanma %${h['win_rate']}'),
+          'kazanma %${h['win_rate']}${mc != null ? ', zarar ihtimali %${mc['loss_prob']}' : ''}'),
       trailing: Text('${avg >= 0 ? '+' : ''}${avg.toStringAsFixed(2)}R',
           style: TextStyle(fontWeight: FontWeight.bold, color: pnlColor(avg))),
     );

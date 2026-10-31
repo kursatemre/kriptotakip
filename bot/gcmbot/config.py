@@ -76,6 +76,12 @@ class RiskSettings(BaseModel):
     max_daily_loss_pct: float = Field(3.0, gt=0, le=50)
     # Pozisyon bu kadar bar sonra kapatılır (0 = kapalı); strateji kendi süresini belirleyebilir
     max_hold_bars: int = Field(0, ge=0)
+    # Koruma: bir sembolde üst üste bu kadar zarar gelirse o sembolde bir süre yeni işlem açılmaz (0 = kapalı)
+    max_consecutive_losses: int = Field(5, ge=0)
+    loss_pause_hours: float = Field(48.0, gt=0)
+    # Koruma: varlık en yüksek değerinden bu kadar düşerse bot elle yeniden başlatılana kadar yeni
+    # işlem açmaz (0 = kapalı)
+    max_drawdown_pct: float = Field(20.0, ge=0, le=90)
 
 
 class LearningSettings(BaseModel):

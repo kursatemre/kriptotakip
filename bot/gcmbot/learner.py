@@ -6,6 +6,7 @@ yeni işlem açar.
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 
@@ -50,11 +51,18 @@ def learn(broker: Broker, cfg: Config, path: Path | None = LEARNED_PATH, data_di
                 per_symbol.setdefault(symbol, []).append({
                     "timeframe": tf, "strategy": best["strategy"], "params": best["params"],
                     "active": res["passed"], "dev": best["dev"], "holdout": best["holdout"],
-                    "cost_ratio": res["cost_ratio"],
+                    "cost_ratio": res["cost_ratio"], "mc": best["mc"], "hold_trades": best["hold_trades"],
                 })
     assignments = {symbol: _pick(c) for symbol, c in per_symbol.items()}
     active = [a for a in assignments.values() if a["active"]]
     trades = sum(a["holdout"]["trades"] for a in active)
+    # Aktif sembollerin saklı test işlemleri zaman sırasıyla tek portföy gibi
+    portfolio = sorted((t for a in active for t in a["hold_trades"]), key=lambda t: t[0])
+    # Bir sembol birden çok zaman diliminde denendiği için şans eseri aktif olma ihtimali de artar
+    luck_expected = sum(1 - math.prod(1 - c["mc"]["luck_pass_prob"] / 100 for c in cands)
+                        for cands in per_symbol.values())
+    for a in assignments.values():
+        del a["hold_trades"]
     learned = {
         "time": int(time.time()), "timeframes": list(lc.timeframes),
         "summary": {
@@ -63,6 +71,9 @@ def learn(broker: Broker, cfg: Config, path: Path | None = LEARNED_PATH, data_di
             # Aktif seçimlerin saklı testteki işlem ağırlıklı ortalama R'si
             "holdout_avg_r": round(sum(a["holdout"]["avg_r"] * a["holdout"]["trades"] for a in active) / trades, 4)
             if trades else 0.0,
+            "monte_carlo": research.monte_carlo([r for _, r in portfolio]),
+            "holdout_from": portfolio[0][0] if portfolio else None,
+            "luck_expected_active": round(luck_expected, 1),
             "by_timeframe": summaries,
         },
         "symbols_researched": len(researched), "assignments": assignments,

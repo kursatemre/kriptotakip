@@ -68,7 +68,8 @@ def download(broker: Broker, symbols: list[str], timeframe: str, bars: int = 100
             info = broker.symbol_info(symbol)
             bid, ask = broker.price(symbol)
             atr = float(ind.atr(df).iloc[-2000:].median()) if len(df) > 30 else float("nan")  # tipik oynaklık
-            meta[symbol] = {**asdict(info), "spread": ask - bid, "atr_" + timeframe: atr,
+            # Önceki kayıt korunur: diğer zaman dilimlerinin ATR'si silinmesin
+            meta[symbol] = {**meta.get(symbol, {}), **asdict(info), "spread": ask - bid, "atr_" + timeframe: atr,
                             "updated": int(time.time())}
             counts[symbol] = len(df)
             # Her sembolden sonra yaz: uzun indirme yarıda kesilirse inen veri kullanılabilsin

@@ -8,9 +8,12 @@ Her sembol için:
 3. Geliştirme dönemi 4 parçaya bölünür. Aday ancak en az 3 parçada kârlıysa ve yeterli
    işlem yaptıysa seçilebilir; uygun olanlardan t-istatistiği en yüksek olan seçilir.
 4. Seçilen aday saklı testte bir kez ölçülür. Geçme şartı: yeterli işlem ve PF eşiği.
+5. Monte Carlo: saklı test işlemleri yeniden örneklenir; zarar olasılığı, kötü senaryodaki düşüş
+   ve hiç üstünlük yokken eşiği şans eseri geçme olasılığı hesaplanır.
 
 Çok sayıda aday denendiği için bazı adaylar geliştirme döneminde şans eseri iyi görünür; asıl
-ölçü saklı testtir.
+ölçü saklı testtir. Saklı testi geçenler de kısmen şanslı olabilir: geçen sayısı, şans eseri
+beklenen sayıdan belirgin fazla değilse sonuç şansla açıklanabilir.
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ MIN_DEV_TRADES = 40
 MIN_POSITIVE_FOLDS = 3
 MIN_HOLDOUT_TRADES = 20
 MIN_HOLDOUT_PF = 1.1
+MC_RUNS = 2000
 
 
 def candidates(include_ml: bool = True) -> list[tuple[str, dict]]:
@@ -68,6 +72,36 @@ def r_stats(rs) -> dict:
         "pf": round(float(pf), 3) if math.isfinite(pf) else None,
         "max_dd_r": round(float((np.maximum.accumulate(cum) - cum).max()), 2),
         "t_stat": round(float(rs.mean() / sd * math.sqrt(n)), 2) if sd > 0 else 0.0,
+    }
+
+
+def _pf(rs: np.ndarray) -> np.ndarray:
+    gains = np.where(rs > 0, rs, 0).sum(axis=-1)
+    losses = -np.where(rs < 0, rs, 0).sum(axis=-1)
+    return np.divide(gains, losses, out=np.full(gains.shape, np.inf), where=losses > 0)
+
+
+def monte_carlo(rs, runs: int = MC_RUNS, seed: int = 0) -> dict:
+    """İşlemleri yerine koyarak yeniden örnekler (bootstrap).
+
+    loss_prob: ortalama R'nin ≤ 0 çıktığı senaryoların yüzdesi.
+    dd_p95_r: senaryoların %95'inde aşılmayan en büyük düşüş (R; %1 riskle ≈ hesabın yüzdesi).
+    luck_pass_prob: işlemler ortalaması 0 olacak şekilde kaydırıldığında (yani hiç üstünlük yokken)
+    saklı test eşiğini (işlem sayısı + PF) geçen senaryoların yüzdesi.
+    """
+    rs = np.asarray(rs, dtype=float)
+    n = len(rs)
+    if n < 2:
+        return {"runs": 0, "loss_prob": 100.0, "dd_p95_r": 0.0, "luck_pass_prob": 0.0}
+    boot = rs[np.random.default_rng(seed).integers(0, n, size=(runs, n))]
+    cum = np.cumsum(boot, axis=1)
+    dd = (np.maximum.accumulate(np.maximum(cum, 0), axis=1) - cum).max(axis=1)
+    luck = n >= MIN_HOLDOUT_TRADES and _pf(boot - rs.mean()) >= MIN_HOLDOUT_PF
+    return {
+        "runs": runs,
+        "loss_prob": round(float((boot.mean(axis=1) <= 0).mean() * 100), 1),
+        "dd_p95_r": round(float(np.percentile(dd, 95)), 1),
+        "luck_pass_prob": round(float(np.mean(luck) * 100), 1),
     }
 
 
@@ -112,11 +146,15 @@ def evaluate_symbol(df: pd.DataFrame, meta: dict, cands: list[tuple[str, dict]],
             "dev": r_stats([tr["r"] for tr in dev]), "folds": fold_r,
             "positive_folds": int(sum(f > 0 for f in fold_r)),
             "holdout": r_stats([tr["r"] for tr in hold]),
+            "_hold": [[int(tr["entry_time"]), round(float(tr["r"]), 4)] for tr in hold],
         })
     # Seçim SADECE geliştirme dönemine göre
     eligible = [r for r in rows if r["dev"]["trades"] >= MIN_DEV_TRADES and r["dev"]["avg_r"] > 0
                 and r["positive_folds"] >= MIN_POSITIVE_FOLDS]
     best = max(eligible, key=lambda r: r["dev"]["t_stat"]) if eligible else None
+    if best:
+        best["hold_trades"] = best.pop("_hold")  # [giriş zamanı, R]: portföy Monte Carlo'su için
+        best["mc"] = monte_carlo([r for _, r in best["hold_trades"]])
     passed = bool(best) and best["holdout"]["trades"] >= MIN_HOLDOUT_TRADES and (
         best["holdout"]["pf"] is None or best["holdout"]["pf"] >= MIN_HOLDOUT_PF)
     years = (times[-1] - split_time) / (365.25 * 86400)
@@ -176,4 +214,6 @@ def summarize(results: dict) -> dict:
         # Seçilen adayların saklı testteki işlem ağırlıklı ortalama R'si: gerçek bir üstünlük varsa > 0
         "holdout_avg_r": round(sum(h["avg_r"] * h["trades"] for h in hold) / total_trades, 4) if total_trades else 0.0,
         "holdout_positive": sum(h["avg_r"] > 0 for h in hold),
+        # Hiç üstünlük olmasaydı şans eseri geçmesi beklenen sembol sayısı (Monte Carlo)
+        "luck_expected_passes": round(sum(r["best"]["mc"]["luck_pass_prob"] for r in selected.values()) / 100, 1),
     }
