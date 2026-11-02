@@ -28,7 +28,9 @@ class FakeEA(threading.Thread):
         if cmd == "account":
             return [f"104250115|{self.server}|Deneme|USD|100|10000.00|9990.50|12.00|9978.50|{self.demo_flag}|1"]
         if cmd == "symbol_info":
-            return [f"{args[0]}|0.00001|5|0.00001|1.0|0.01|100|0.01|10|-6.5|1.2|0"]
+            if args[0] == "#HSI":  # çeviri paritesi yok: MT4 tick değerini 0 verir
+                return ["#HSI|1|0|1|0|0.01|100|0.01|0|-1|-1|2|10|HKD"]
+            return [f"{args[0]}|0.00001|5|0.00001|1.0|0.01|100|0.01|10|-6.5|1.2|0|100000|USD"]
         if cmd == "rates":
             n = int(args[2]) if self.bars is None else min(int(args[2]), self.bars)
             return [f"{3600 * i}|1.1|1.2|1.0|1.15|10" for i in range(n)]
@@ -95,6 +97,12 @@ def test_account_and_symbol_info(tmp_path, ea):
     info = b.symbol_info("EURUSD")
     assert info.digits == 5 and info.tick_value == 1.0 and info.volume_step == 0.01 and info.stops_level == 10
     assert info.swap_long == -6.5 and info.swap_short == 1.2 and info.swap_type == 0
+
+
+def test_tick_value_computed_for_usd_pegged_currency(tmp_path, ea):
+    b = make(tmp_path)
+    assert b.symbol_info("#HSI").tick_value == pytest.approx(10 / 7.8)
+    assert b.symbol_info("EURUSD").tick_value == 1.0
 
 
 def test_demo_detected_from_server_name(tmp_path, ea):

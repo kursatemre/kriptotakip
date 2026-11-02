@@ -27,6 +27,9 @@ ENCODING = "mbcs" if os.name == "nt" else "latin-1"
 # EA isteği aldıysa (ör. emir gönderiyor) yanıt bu kadar daha beklenir; vazgeçersek
 # aynı emir bir sonraki turda tekrar gönderilebilir
 MAX_EXTRA_WAIT = 60.0
+# MT4, hesap para birimine çeviri paritesi olmayan sembollerde tick değerini 0 verir (GCM'de
+# USDHKD yok, #HSI etkilenir). Dolara sabitlenmiş kurlarda değeri kendimiz hesaplarız: 1 USD = x
+USD_PEGS = {"HKD": 7.8}
 
 
 def default_bridge_dir() -> Path:
@@ -129,9 +132,13 @@ class MT4Broker(Broker):
 
     def symbol_info(self, symbol):
         f = self._call("symbol_info", symbol)[0]
+        tick_value = float(f[4])
+        # Eski EA kontrat büyüklüğünü ve kâr para birimini göndermez (f[12], f[13])
+        if tick_value <= 0 and len(f) > 13 and f[13] in USD_PEGS and self.account()["currency"] == "USD":
+            tick_value = float(f[12]) * float(f[3]) / USD_PEGS[f[13]]
         return SymbolInfo(
             name=f[0], point=float(f[1]), digits=int(f[2]), tick_size=float(f[3]),
-            tick_value=float(f[4]), volume_min=float(f[5]), volume_max=float(f[6]),
+            tick_value=tick_value, volume_min=float(f[5]), volume_max=float(f[6]),
             volume_step=float(f[7]), stops_level=int(f[8]),
             swap_long=float(f[9]), swap_short=float(f[10]), swap_type=int(f[11]),
         )

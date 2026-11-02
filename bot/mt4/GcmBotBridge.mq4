@@ -221,7 +221,8 @@ void CmdSymbolInfo(string sym, string &err)
            + "|" + Num(MarketInfo(sym, MODE_MINLOT)) + "|" + Num(MarketInfo(sym, MODE_MAXLOT))
            + "|" + Num(MarketInfo(sym, MODE_LOTSTEP)) + "|" + IntegerToString((int)MarketInfo(sym, MODE_STOPLEVEL))
            + "|" + Num(MarketInfo(sym, MODE_SWAPLONG)) + "|" + Num(MarketInfo(sym, MODE_SWAPSHORT))
-           + "|" + IntegerToString((int)MarketInfo(sym, MODE_SWAPTYPE)));
+           + "|" + IntegerToString((int)MarketInfo(sym, MODE_SWAPTYPE))
+           + "|" + Num(MarketInfo(sym, MODE_LOTSIZE)) + "|" + SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT));
 }
 
 // Grafigi acip en basa kaydirir (Home tusu gibi): MT4 sunucudan eski barlari indirir
