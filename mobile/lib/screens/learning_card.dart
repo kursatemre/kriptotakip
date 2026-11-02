@@ -159,6 +159,7 @@ class _LearningCardState extends State<LearningCard> {
         symbol,
         if (a['timeframe'] != null) a['timeframe'],
         _strategyNames[a['strategy']] ?? a['strategy'],
+        if (a['tp_r'] != null) 'kâr al ${a['tp_r']}R',
       ].join(' • ')),
       subtitle: Text('Saklı test: ${h['trades']} işlem, PF ${pf ?? '∞'}, '
           'kazanma %${h['win_rate']}${mc != null ? ', zarar ihtimali %${mc['loss_prob']}' : ''}'),

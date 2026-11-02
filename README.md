@@ -114,7 +114,7 @@ Botta 7 strateji var:
 | `ml_boost` | Gradient boosting modeli; sadece geçmiş veriyle düzenli yeniden eğitilir | Hepsi |
 
 Tüm stratejilerde stop-loss ve take-profit ATR'ye göre otomatik konur (varsayılan SL 1.5×ATR,
-TP 3×ATR). Lot, her işlemde sermayenin **%1'ini** riske edecek şekilde hesaplanır.
+TP 3×ATR; öğrenen botta TP her sembol için ayrıca seçilir). Lot, her işlemde sermayenin **%1'ini** riske edecek şekilde hesaplanır.
 
 **Önerilen çalışma akışı:**
 
@@ -144,7 +144,9 @@ Paneldeki **Öğrenen bot** anahtarı açılınca bot elle seçilen strateji yer
 
 1. Hesaptaki tüm sembollerin geçmişini `bot\data`'ya indirir (ilk seferde MT4 grafikleri açıp
    kapatarak derin geçmiş yükler; bu sırada MT4'ü kullanmayın).
-2. Her sembolde ~60 strateji/parametre adayını spread ve swap dahil dener. Her sembolün **son
+2. Her sembolde ~60 strateji/parametre adayını spread ve swap dahil dener. Her aday 4 farklı
+   **kâr al** mesafesiyle denenir: zarar durdur mesafesinin 1, 1.5, 2 ve 3 katı (1R–3R); seçilen
+   mesafe kartta görünür ve bot o sembolde TP'yi buna göre koyar. Her sembolün **son
    %25'lik verisi saklı tutulur**; seçim sadece ilk %75'te yapılır ve aday bu dönemin 4
    parçasının en az 3'ünde kârlı olmalıdır.
 3. Seçilen strateji saklı dönemde de en az 20 işlemde PF ≥ 1.1 tutturursa sembol **aktif** olur.

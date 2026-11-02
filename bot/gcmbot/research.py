@@ -2,7 +2,7 @@
 
 Her sembol için:
 1. Verinin son %25'i SAKLI TEST olarak ayrılır; seçimde hiç kullanılmaz.
-2. Her aday (strateji + parametre) tüm veride bir kez çalıştırılır (stratejiler nedenseldir,
+2. Her aday (strateji + parametre + kâr al mesafesi) tüm veride bir kez çalıştırılır (stratejiler nedenseldir,
    ML modeli yürüyen pencereyle eğitilir); işlemler giriş zamanına göre geliştirme/saklı
    test diye ayrılır. Sonuçlar R cinsindendir (1R = riske edilen tutar), spread ve swap dahil.
 3. Geliştirme dönemi 4 parçaya bölünür. Aday ancak en az 3 parçada kârlıysa ve yeterli
@@ -19,6 +19,7 @@ beklenen sayıdan belirgin fazla değilse sonuç şansla açıklanabilir.
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import json
 import math
@@ -39,6 +40,8 @@ MIN_POSITIVE_FOLDS = 3
 MIN_HOLDOUT_TRADES = 20
 MIN_HOLDOUT_PF = 1.1
 MC_RUNS = 2000
+# Denenecek kâr al mesafeleri, zarar durdur mesafesinin katı olarak (R)
+TP_RS = (1.0, 1.5, 2.0, 3.0)
 
 
 def candidates(include_ml: bool = True) -> list[tuple[str, dict]]:
@@ -135,30 +138,34 @@ def cost_settings(meta: dict, price: float = 0.0, sl_atr_mult: float = 1.5,
 
 
 def evaluate_symbol(df: pd.DataFrame, meta: dict, cands: list[tuple[str, dict]],
-                    holdout_frac: float = HOLDOUT_FRAC, max_loss_prob: float = 100.0) -> dict:
+                    holdout_frac: float = HOLDOUT_FRAC, max_loss_prob: float = 100.0,
+                    sl_atr_mult: float = 1.5) -> dict:
     df = df.reset_index(drop=True)
     times = df["time"].to_numpy()
     split_time = int(times[int(len(df) * (1 - holdout_frac))])
-    settings = cost_settings(meta, price=float(df["close"].iloc[-1]))
+    base = cost_settings(meta, price=float(df["close"].iloc[-1]), sl_atr_mult=sl_atr_mult)
     rows = []
     for name, params in cands:
         strat = make_strategy(name, params)
         if len(df) < strat.warmup + 1000:
             continue
-        trades = run_backtest(df, strat, settings)["trades"]
-        dev = [tr for tr in trades if tr["entry_time"] < split_time]
-        hold = [tr for tr in trades if tr["entry_time"] >= split_time]
+        sig = strat.signals(df).to_numpy()
         start = int(times[strat.warmup])
         edges = np.linspace(start, split_time, FOLDS + 1)
-        fold_r = [round(sum(tr["r"] for tr in dev if edges[k] <= tr["entry_time"] < edges[k + 1]), 2)
-                  for k in range(FOLDS)]
-        rows.append({
-            "strategy": name, "params": strat.params,
-            "dev": r_stats([tr["r"] for tr in dev]), "folds": fold_r,
-            "positive_folds": int(sum(f > 0 for f in fold_r)),
-            "holdout": r_stats([tr["r"] for tr in hold]),
-            "_hold": [[int(tr["entry_time"]), round(float(tr["r"]), 4)] for tr in hold],
-        })
+        for tp_r in TP_RS:
+            settings = dataclasses.replace(base, tp_atr_mult=sl_atr_mult * tp_r)
+            trades = run_backtest(df, strat, settings, signals=sig)["trades"]
+            dev = [tr for tr in trades if tr["entry_time"] < split_time]
+            hold = [tr for tr in trades if tr["entry_time"] >= split_time]
+            fold_r = [round(sum(tr["r"] for tr in dev if edges[k] <= tr["entry_time"] < edges[k + 1]), 2)
+                      for k in range(FOLDS)]
+            rows.append({
+                "strategy": name, "params": strat.params, "tp_r": tp_r,
+                "dev": r_stats([tr["r"] for tr in dev]), "folds": fold_r,
+                "positive_folds": int(sum(f > 0 for f in fold_r)),
+                "holdout": r_stats([tr["r"] for tr in hold]),
+                "_hold": [[int(tr["entry_time"]), round(float(tr["r"]), 4)] for tr in hold],
+            })
     # Seçim SADECE geliştirme dönemine göre
     eligible = [r for r in rows if r["dev"]["trades"] >= MIN_DEV_TRADES and r["dev"]["avg_r"] > 0
                 and r["positive_folds"] >= MIN_POSITIVE_FOLDS]
@@ -185,7 +192,8 @@ def cost_ratio(meta: dict, timeframe: str) -> float:
 
 
 def run(symbols: list[str], timeframe: str, include_ml: bool = True, max_cost_ratio: float = 0.2,
-        max_loss_prob: float = 100.0, data_dir: Path = data.DATA_DIR, progress=print) -> dict:
+        max_loss_prob: float = 100.0, sl_atr_mult: float = 1.5, data_dir: Path = data.DATA_DIR,
+        progress=print) -> dict:
     metas = data.load_symbols(data_dir)
     cands = candidates(include_ml)
     results, skipped = {}, {}
@@ -199,16 +207,16 @@ def run(symbols: list[str], timeframe: str, include_ml: bool = True, max_cost_ra
             skipped[symbol] = f"maliyet yüksek (spread/ATR {ratio:.2f})"
             continue
         t0 = time.time()
-        res = evaluate_symbol(df, meta, cands, max_loss_prob=max_loss_prob)
+        res = evaluate_symbol(df, meta, cands, max_loss_prob=max_loss_prob, sl_atr_mult=sl_atr_mult)
         res["cost_ratio"] = round(ratio, 3)
         results[symbol] = res
         b = res["best"]
         progress(f"[{i}/{len(symbols)}] {symbol}: {res['bars']} bar, {res['eligible']}/{res['candidates']} uygun aday"
-                 + (f", seçilen {b['strategy']} → saklı test {b['holdout']['trades']} işlem, "
+                 + (f", seçilen {b['strategy']} TP {b['tp_r']}R → saklı test {b['holdout']['trades']} işlem, "
                     f"PF {b['holdout']['pf']}, ort {b['holdout']['avg_r']:+.3f}R, zarar ihtimali %{b['mc']['loss_prob']}"
                     f" {'GEÇTİ' if res['passed'] else 'kaldı'}" if b else ", uygun aday yok")
                  + f" ({time.time() - t0:.0f} sn)")
-    report = {"timeframe": timeframe, "created": int(time.time()), "candidates": len(cands),
+    report = {"timeframe": timeframe, "created": int(time.time()), "candidates": len(cands) * len(TP_RS),
               "results": results, "skipped": skipped, "summary": summarize(results)}
     (data_dir / f"research_{timeframe}.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
     return report

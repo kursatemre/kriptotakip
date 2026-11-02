@@ -61,9 +61,11 @@ def rollovers(t0: int, t1: int) -> int:
     return n
 
 
-def run_backtest(df: pd.DataFrame, strategy: Strategy, s: BacktestSettings) -> dict:
+def run_backtest(df: pd.DataFrame, strategy: Strategy, s: BacktestSettings,
+                 signals: np.ndarray | None = None) -> dict:
+    """signals: önceden hesaplanmış sinyaller (aynı strateji farklı SL/TP ile denenirken)."""
     df = df.reset_index(drop=True)
-    sig = strategy.signals(df).to_numpy()
+    sig = strategy.signals(df).to_numpy() if signals is None else signals
     atr = ind.atr(df, s.atr_period).to_numpy()
     o, h, l, c = (df[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close"))
     t = df["time"].to_numpy()

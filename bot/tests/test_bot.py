@@ -10,6 +10,7 @@ from gcmbot.broker import BrokerError, FakeBroker
 from gcmbot.config import Config
 from gcmbot.crypto import CACHE_SECONDS, CryptoPrices
 from gcmbot.engine import MAX_ATTEMPTS, Engine
+from gcmbot.research import TP_RS
 from gcmbot.risk import SymbolInfo, position_size, stop_levels
 from gcmbot.strategies import STRATEGIES, Strategy, make_strategy
 
@@ -402,7 +403,7 @@ def test_learner_end_to_end(tmp_path):
     for a in out["assignments"].values():
         assert a["strategy"] in STRATEGIES and "holdout" in a and isinstance(a["active"], bool)
         assert a["timeframe"] in ("H1", "H4")
-        assert "mc" in a and "hold_trades" not in a
+        assert "mc" in a and "hold_trades" not in a and a["tp_r"] in TP_RS
 
 
 def test_learner_prefers_passing_timeframe_then_dev_t_stat():
@@ -515,7 +516,7 @@ def test_strict_mode_filters_active_symbols_immediately():
     engine, _ = make_engine()
     engine.cfg.learning.enabled = True
     engine.cfg.learning.timeframes = ["H1"]
-    engine.learned = {"time": 9e12, "timeframes": ["H1"], "assignments": {
+    engine.learned = {"time": 9e12, "timeframes": ["H1"], "tp_rs": list(TP_RS), "assignments": {
         "EURUSD": {"timeframe": "H1", "strategy": "donchian_breakout", "params": {"period": 10}, "active": True,
                    "mc": {"loss_prob": 25.0}},
         "XAUUSD": {"timeframe": "H1", "strategy": "donchian_breakout", "params": {"period": 10}, "active": True,
@@ -524,6 +525,32 @@ def test_strict_mode_filters_active_symbols_immediately():
     assert engine.active_symbols() == ["EURUSD", "XAUUSD"] and not engine._learn_due()
     engine.apply_settings(learning={"max_loss_prob_pct": 10})
     assert engine.active_symbols() == ["XAUUSD"] and engine._learn_due()  # şans istatistikleri için yeniden öğren
+
+
+def test_learned_take_profit_used_and_old_learning_redone():
+    engine, broker = make_engine()
+    engine.cfg.learning.enabled = True
+    engine.cfg.learning.timeframes = ["H1"]
+    engine.learned = {"time": 9e12, "timeframes": ["H1"], "tp_rs": list(TP_RS), "assignments": {
+        "EURUSD": {"timeframe": "H1", "strategy": "donchian_breakout", "params": {"period": 10}, "active": True,
+                   "tp_r": 1.0}}}
+    engine._build_strategies()
+    assert not engine._learn_due()
+    df = broker.rates("EURUSD", "H1", 100)
+    engine._open("EURUSD", 1, df, broker.account(), engine.strategies["EURUSD"])
+    p = broker.positions(engine.cfg.trading.magic)[0]
+    assert p.tp - p.open_price == pytest.approx(p.open_price - p.sl, abs=2e-5)  # 1R hedef
+    del engine.learned["tp_rs"]  # kâr al mesafesi seçilmeden yapılmış eski öğrenme
+    assert engine._learn_due()
+
+
+def test_research_picks_take_profit_by_dev_only():
+    from gcmbot.research import evaluate_symbol
+    df = FakeBroker(bar_seconds=None, history_bars=3000).rates("EURUSD", "H1", 3000)
+    res = evaluate_symbol(df, {"spread": 0.0}, [("donchian_breakout", {"period": 20})])
+    assert res["candidates"] == len(TP_RS)
+    if res["best"]:
+        assert res["best"]["tp_r"] in TP_RS
 
 
 # ------------------------------------------------------------------------ API

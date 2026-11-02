@@ -18,7 +18,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from . import indicators as ind
-from . import learner
+from . import learner, research
 from .broker import Broker, BrokerError
 from .config import Config
 from .risk import position_size, stop_levels
@@ -131,6 +131,7 @@ class Engine:
         lr = self.learned
         return (not lr or set(self._learned_timeframes()) != set(self.cfg.learning.timeframes)
                 or lr.get("max_loss_prob_pct", 100.0) != self.cfg.learning.max_loss_prob_pct
+                or lr.get("tp_rs") != list(research.TP_RS)  # kâr al mesafesi seçilmeden öğrenilmiş
                 or time.time() - lr.get("time", 0) > self.cfg.learning.every_days * 86400)
 
     def _learn(self):
@@ -478,7 +479,10 @@ class Engine:
         atr_value = float(ind.atr(df, r.atr_period).iloc[-1])
         bid, ask = self.broker.price(symbol)
         entry = ask if side > 0 else bid
-        sl, tp = stop_levels(side, entry, atr_value, r.sl_atr_mult, r.tp_atr_mult, info)
+        # Öğrenen modda kâr al mesafesi sembol için seçilen R katıdır
+        tp_r = (self._assignments().get(symbol) or {}).get("tp_r") if self.auto else None
+        tp_mult = r.sl_atr_mult * tp_r if tp_r else r.tp_atr_mult
+        sl, tp = stop_levels(side, entry, atr_value, r.sl_atr_mult, tp_mult, info)
         side_txt = "AL" if side > 0 else "SAT"
         if info.tick_value <= 0:  # MT4 bazı çapraz kurlarda piyasa kapalıyken 0 döndürür
             self.event("warn", f"{symbol} {side_txt} atlandı: kontrat değeri (tick value) alınamadı, lot hesaplanamıyor")

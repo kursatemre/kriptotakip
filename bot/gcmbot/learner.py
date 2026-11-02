@@ -42,14 +42,15 @@ def learn(broker: Broker, cfg: Config, path: Path | None = LEARNED_PATH, data_di
         data.download(broker, universe, tf, data_dir=data_dir, progress=progress)
         progress(f"Araştırma çalışıyor ({tf})")
         report = research.run(universe, tf, include_ml=lc.use_ml, max_cost_ratio=lc.max_cost_ratio,
-                              max_loss_prob=lc.max_loss_prob_pct, data_dir=data_dir, progress=progress)
+                              max_loss_prob=lc.max_loss_prob_pct, sl_atr_mult=cfg.risk.sl_atr_mult,
+                              data_dir=data_dir, progress=progress)
         summaries[tf] = report["summary"]
         researched |= set(report["results"])
         for symbol, res in report["results"].items():
             best = res["best"]
             if best:
                 per_symbol.setdefault(symbol, []).append({
-                    "timeframe": tf, "strategy": best["strategy"], "params": best["params"],
+                    "timeframe": tf, "strategy": best["strategy"], "params": best["params"], "tp_r": best["tp_r"],
                     "active": res["passed"], "dev": best["dev"], "holdout": best["holdout"],
                     "cost_ratio": res["cost_ratio"], "mc": best["mc"], "hold_trades": best["hold_trades"],
                 })
@@ -65,6 +66,7 @@ def learn(broker: Broker, cfg: Config, path: Path | None = LEARNED_PATH, data_di
         del a["hold_trades"]
     learned = {
         "time": int(time.time()), "timeframes": list(lc.timeframes), "max_loss_prob_pct": lc.max_loss_prob_pct,
+        "tp_rs": list(research.TP_RS),
         "summary": {
             "passed": sorted(s for s, a in assignments.items() if a["active"]),
             "holdout_trades": trades,
