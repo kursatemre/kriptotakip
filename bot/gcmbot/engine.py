@@ -232,7 +232,8 @@ class Engine:
         except OSError as e:
             log.warning("%s yazılamadı: %s", self.journal_path.name, e)
 
-    def _record(self, ticket: int, symbol: str, open_time: int, risk: float, strategy: str):
+    def _record(self, ticket: int, symbol: str, open_time: int, risk: float, strategy: str,
+                tp_r: float | None = None):
         """İşlemin riskini (para) ve öğrenmedeki saklı test beklentisini günlüğe yazar."""
         a = (self._assignments().get(symbol) or {}) if self.auto else {}
         h = a.get("holdout") or {}
@@ -240,7 +241,7 @@ class Engine:
         sd = h["avg_r"] * math.sqrt(h["trades"]) / h["t_stat"] if h.get("t_stat") else None
         self._journal[str(ticket)] = {
             "symbol": symbol, "open_time": int(open_time), "risk": round(risk, 2), "strategy": strategy,
-            "timeframe": self.timeframe_for(symbol), "tp_r": a.get("tp_r"),
+            "timeframe": self.timeframe_for(symbol), "tp_r": tp_r if tp_r is not None else a.get("tp_r"),
             "expected_r": h.get("avg_r"), "sd_r": round(sd, 3) if sd else None,
         }
         self._save_journal()
@@ -257,8 +258,10 @@ class Engine:
             if info.tick_value <= 0 or info.tick_size <= 0:
                 continue
             risk = abs(p.open_price - p.sl) * info.tick_value / info.tick_size * p.volume
+            # Pozisyon eski bir öğrenmeyle açılmış olabilir: kâr al oranı kendi SL/TP'sinden
+            tp_r = round(abs(p.tp - p.open_price) / abs(p.open_price - p.sl), 2) if p.tp and p.open_price != p.sl else None
             strat = self.strategy_for(p.symbol)
-            self._record(p.ticket, p.symbol, p.open_time, risk, strat.name if strat else "")
+            self._record(p.ticket, p.symbol, p.open_time, risk, strat.name if strat else "", tp_r)
 
     def scorecard(self) -> dict:
         """Demo karnesi: günlükteki kapanmış işlemlerin R sonucu, saklı test beklentisi ve şans aralığıyla.

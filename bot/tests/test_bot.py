@@ -597,13 +597,14 @@ def test_open_positions_without_journal_are_added_from_stop_loss(tmp_path):
     engine, broker = learned_engine(tmp_path)
     magic = engine.cfg.trading.magic
     bid, ask = broker.price("EURUSD")
-    ticket = broker.open_position("EURUSD", 1, 0.1, ask - 0.0050, ask + 0.0100, magic)
+    ticket = broker.open_position("EURUSD", 1, 0.1, ask - 0.0050, ask + 0.0075, magic)  # 1.5R, öğrenmede 2R
     engine.tick()
     j = engine._journal[str(ticket)]
     info = broker.symbol_info("EURUSD")
     p = broker.positions(magic)[0]
     assert j["risk"] == pytest.approx(abs(p.open_price - p.sl) * info.tick_value / info.tick_size * 0.1)
     assert j["expected_r"] == 0.2
+    assert j["tp_r"] == pytest.approx(1.5, abs=0.01)
 
 
 def test_research_picks_take_profit_by_dev_only():
