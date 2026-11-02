@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import threading
 import time
 import urllib.parse
@@ -35,11 +36,13 @@ LEARN_RETRY_SECONDS = 3600
 # Üst üste zarar koruması için bakılan kapanmış işlem geçmişi
 LOSS_HISTORY_DAYS = 90
 DRAWDOWN_HALT = "Toplam düşüş limiti"
+# Karne: beklentisi bilinmeyen işlemlerde varsayılan işlem başı standart sapma (R)
+DEFAULT_SD_R = 1.2
 
 
 class Engine:
     def __init__(self, cfg: Config, broker: Broker, on_config_change=None, state_path: Path | None = None,
-                 learned_path: Path | None = None):
+                 learned_path: Path | None = None, journal_path: Path | None = None):
         self.cfg = cfg
         self.broker = broker
         self.on_config_change = on_config_change
@@ -48,6 +51,9 @@ class Engine:
         # Öğrenme sonucu (sembol → strateji); None ise sadece bellekte tutulur
         self.learned_path = learned_path
         self.learned = learner.load_learned(learned_path) if learned_path else None
+        # İşlem günlüğü (ticket → açılıştaki risk ve beklenti): demo karnesi bundan hesaplanır
+        self.journal_path = journal_path
+        self._journal: dict[str, dict] = self._load_journal()
         self.strategies: dict[str, Strategy] = {}
         self.learning_running = False
         self.learning_progress = ""
@@ -206,6 +212,119 @@ class Engine:
         except OSError as e:
             log.warning("%s yazılamadı: %s", self.state_path.name, e)
 
+    # ------------------------------------------------------------- işlem günlüğü
+    def _load_journal(self) -> dict[str, dict]:
+        if not (self.journal_path and self.journal_path.exists()):
+            return {}
+        try:
+            return json.loads(self.journal_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            log.warning("%s okunamadı, yok sayılıyor: %s", self.journal_path.name, e)
+            return {}
+
+    def _save_journal(self):
+        if not self.journal_path:
+            return
+        try:
+            tmp = self.journal_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._journal, indent=1), encoding="utf-8")
+            tmp.replace(self.journal_path)
+        except OSError as e:
+            log.warning("%s yazılamadı: %s", self.journal_path.name, e)
+
+    def _record(self, ticket: int, symbol: str, open_time: int, risk: float, strategy: str):
+        """İşlemin riskini (para) ve öğrenmedeki saklı test beklentisini günlüğe yazar."""
+        a = (self._assignments().get(symbol) or {}) if self.auto else {}
+        h = a.get("holdout") or {}
+        # Saklı testin işlem başı standart sapması: t = ort / sd * √n
+        sd = h["avg_r"] * math.sqrt(h["trades"]) / h["t_stat"] if h.get("t_stat") else None
+        self._journal[str(ticket)] = {
+            "symbol": symbol, "open_time": int(open_time), "risk": round(risk, 2), "strategy": strategy,
+            "timeframe": self.timeframe_for(symbol), "tp_r": a.get("tp_r"),
+            "expected_r": h.get("avg_r"), "sd_r": round(sd, 3) if sd else None,
+        }
+        self._save_journal()
+
+    def _journal_open_positions(self, positions):
+        """Günlükte olmayan açık pozisyonları (ör. günlükten önce açılanlar) SL'lerinden ekler."""
+        for p in positions:
+            if str(p.ticket) in self._journal or not p.sl:
+                continue
+            try:
+                info = self.broker.symbol_info(p.symbol)
+            except BrokerError:
+                continue
+            if info.tick_value <= 0 or info.tick_size <= 0:
+                continue
+            risk = abs(p.open_price - p.sl) * info.tick_value / info.tick_size * p.volume
+            strat = self.strategy_for(p.symbol)
+            self._record(p.ticket, p.symbol, p.open_time, risk, strat.name if strat else "")
+
+    def scorecard(self) -> dict:
+        """Demo karnesi: günlükteki kapanmış işlemlerin R sonucu, saklı test beklentisi ve şans aralığıyla.
+
+        R = kâr / açılıştaki risk. Beklenen aralık: beklenen toplam ± 2 standart sapma (%95).
+        Şans aralığı: hiç üstünlük yokken (beklenti 0) aynı işlemlerin %95 aralığı.
+        """
+        magic = self.cfg.trading.magic
+        with self._lock:
+            journal = dict(self._journal)
+        since = min((j["open_time"] for j in journal.values()), default=None)
+        closed = []
+        if since:
+            days = int((time.time() - since) / 86400) + 2
+            closed = sorted((d for d in self.broker.history(magic, days) if str(d["ticket"]) in journal),
+                            key=lambda d: d["time"])
+        trades = []
+        for d in closed:
+            j = journal[str(d["ticket"])]
+            trades.append({"ticket": d["ticket"], "symbol": d["symbol"], "open_time": j["open_time"],
+                           "close_time": d["time"], "profit": d["profit"],
+                           "r": round(d["profit"] / j["risk"], 3) if j["risk"] > 0 else 0.0,
+                           "expected_r": j.get("expected_r")})
+        js = [journal[str(t["ticket"])] for t in trades]
+        n = len(trades)
+        total_r = sum(t["r"] for t in trades)
+        expected = sum(j.get("expected_r") or 0.0 for j in js)
+        sd = math.sqrt(sum((j.get("sd_r") or DEFAULT_SD_R) ** 2 for j in js))
+        if n == 0:
+            verdict = "none"
+        elif total_r < expected - 2 * sd:
+            verdict = "below"
+        elif total_r > expected + 2 * sd:
+            verdict = "above"
+        else:
+            verdict = "within"
+        # Üstünlüğü şanstan ayırmak için gereken yaklaşık işlem sayısı: ort > 2 × sd / √n
+        known = [j for j in journal.values() if j.get("expected_r") is not None]
+        mu = sum(j["expected_r"] for j in known) / len(known) if known else 0.0
+        sd_one = math.sqrt(sum((j.get("sd_r") or DEFAULT_SD_R) ** 2 for j in known) / len(known)) if known else 0.0
+        by_symbol: dict[str, dict] = {}
+        for t in trades:
+            b = by_symbol.setdefault(t["symbol"], {"trades": 0, "total_r": 0.0, "expected_r": 0.0, "profit": 0.0})
+            b["trades"] += 1
+            b["total_r"] = round(b["total_r"] + t["r"], 3)
+            b["expected_r"] = round(b["expected_r"] + (t["expected_r"] or 0.0), 3)
+            b["profit"] = round(b["profit"] + t["profit"], 2)
+        open_pos = [p for p in self.broker.positions(magic) if str(p.ticket) in journal]
+        open_r = sum(p.profit / journal[str(p.ticket)]["risk"] for p in open_pos if journal[str(p.ticket)]["risk"] > 0)
+        return {
+            "since": since, "trades": n, "wins": sum(t["r"] > 0 for t in trades),
+            "total_r": round(total_r, 3), "avg_r": round(total_r / n, 3) if n else 0.0,
+            "profit": round(sum(t["profit"] for t in trades), 2),
+            "expected_r": round(expected, 3), "expected_avg_r": round(mu, 3),
+            "band": [round(expected - 2 * sd, 3), round(expected + 2 * sd, 3)],
+            "luck_band": [round(-2 * sd, 3), round(2 * sd, 3)],
+            "verdict": verdict,
+            # Üstünlük yokken bu kadar iyi sonucun ihtimali ~%2.5
+            "edge_shown": n > 0 and total_r > 2 * sd,
+            "needed_trades": math.ceil((2 * sd_one / mu) ** 2) if mu > 0 else None,
+            "open": {"count": len(open_pos), "profit": round(sum(p.profit for p in open_pos), 2),
+                     "r": round(open_r, 3)},
+            "by_symbol": by_symbol,
+            "recent": trades[::-1][:20],
+        }
+
     # ------------------------------------------------------------ yaşam döngüsü
     def start_thread(self):
         self._thread = threading.Thread(target=self._loop, name="engine", daemon=True)
@@ -322,7 +441,9 @@ class Engine:
             self._check_drawdown(acc)
             active = self.active_symbols()
             # Açık pozisyonu olan semboller de izlenir (süre sınırı); pasif sembolde yeni işlem açılmaz
-            held = sorted({p.symbol for p in self.broker.positions(self.cfg.trading.magic)})
+            positions = self.broker.positions(self.cfg.trading.magic)
+            held = sorted({p.symbol for p in positions})
+            self._journal_open_positions(positions)
             for symbol in dict.fromkeys([*active, *held]):
                 try:
                     self._process_symbol(symbol, acc, can_open=symbol in active)
@@ -493,6 +614,8 @@ class Engine:
             return
         ticket = self.broker.open_position(symbol, side, volume, sl, tp, self.cfg.trading.magic,
                                            comment=f"gcmbot {strat.name}")
+        self._record(ticket, symbol, int(time.time()), volume * abs(entry - sl) * info.tick_value / info.tick_size,
+                     strat.name)
         self.event("info", f"{symbol} {side_txt} {volume} lot @ {entry} | SL {sl} TP {tp} (#{ticket})",
                    notify=True)
 

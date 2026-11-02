@@ -66,6 +66,7 @@ class BotApi {
   Future<List<dynamic>> history({int days = 30}) async =>
       await _request('GET', '/api/history?days=$days');
   Future<List<dynamic>> events() async => await _request('GET', '/api/events');
+  Future<Map<String, dynamic>> scorecard() async => await _request('GET', '/api/scorecard');
   Future<Map<String, dynamic>> strategies() async => await _request('GET', '/api/strategies');
   Future<Map<String, dynamic>> crypto() async => await _request('GET', '/api/crypto');
   Future<Map<String, dynamic>> learn() async => await _request('POST', '/api/learn');

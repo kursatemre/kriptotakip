@@ -9,3 +9,5 @@ __pycache__/
 data/
 learned.json
 learned.tmp
+journal.json
+journal.tmp

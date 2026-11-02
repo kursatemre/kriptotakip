@@ -544,6 +544,68 @@ def test_learned_take_profit_used_and_old_learning_redone():
     assert engine._learn_due()
 
 
+def learned_engine(tmp_path):
+    engine, broker = make_engine()
+    engine.journal_path = tmp_path / "journal.json"
+    engine.cfg.learning.enabled = True
+    engine.cfg.learning.timeframes = ["H1"]
+    engine.learned = {"time": 9e12, "timeframes": ["H1"], "tp_rs": list(TP_RS), "assignments": {
+        "EURUSD": {"timeframe": "H1", "strategy": "donchian_breakout", "params": {"period": 10}, "active": True,
+                   "tp_r": 2.0, "holdout": {"trades": 100, "avg_r": 0.2, "t_stat": 2.0}}}}
+    engine._build_strategies()
+    return engine, broker
+
+
+def test_scorecard_scores_closed_trades_against_expectation(tmp_path):
+    engine, broker = learned_engine(tmp_path)
+    magic = engine.cfg.trading.magic
+    assert engine.scorecard()["verdict"] == "none"
+    engine._open("EURUSD", 1, broker.rates("EURUSD", "H1", 100), broker.account(), engine.strategies["EURUSD"])
+    p = broker.positions(magic)[0]
+    j = engine._journal[str(p.ticket)]
+    assert j["expected_r"] == 0.2 and j["sd_r"] == 1.0 and j["tp_r"] == 2.0
+    assert j["risk"] == pytest.approx(broker.account()["equity"] * engine.cfg.risk.risk_per_trade_pct / 100, rel=0.05)
+    sc = engine.scorecard()
+    assert sc["trades"] == 0 and sc["open"]["count"] == 1
+    broker.close_position(p.ticket)
+    sc = engine.scorecard()
+    profit = broker.history(magic, 1)[0]["profit"]
+    assert sc["trades"] == 1 and sc["total_r"] == pytest.approx(profit / j["risk"], abs=1e-3)
+    assert sc["band"] == [pytest.approx(-1.8), pytest.approx(2.2)] and sc["luck_band"] == [-2.0, 2.0]
+    assert sc["verdict"] == "within" and not sc["edge_shown"]
+    assert sc["needed_trades"] == 100  # (2 × 1.0 / 0.2)²
+    assert sc["by_symbol"]["EURUSD"]["trades"] == 1 and sc["recent"][0]["ticket"] == p.ticket
+    # Günlük diskte: yeniden başlatınca karne kaybolmaz
+    again = Engine(engine.cfg, broker, journal_path=tmp_path / "journal.json")
+    assert again.scorecard()["trades"] == 1
+
+
+def test_scorecard_verdict_below_expectation(tmp_path):
+    engine, broker = learned_engine(tmp_path)
+    magic = engine.cfg.trading.magic
+    for i in range(6):
+        engine._record(9000 + i, "EURUSD", 100, 100.0, "donchian_breakout")
+        broker._closed.append({"ticket": 9000 + i, "time": 200 + i, "symbol": "EURUSD", "side": "buy",
+                               "volume": 0.1, "price": 1.1, "profit": -100.0, "magic": magic})
+    engine.broker.history = lambda m, d: [x for x in broker._closed if x["magic"] == m]
+    sc = engine.scorecard()
+    # 6 tam zarar = -6R; beklenen +1.2R ± 2·√6 ≈ ±4.9R → aralığın altında
+    assert sc["trades"] == 6 and sc["total_r"] == -6 and sc["verdict"] == "below"
+
+
+def test_open_positions_without_journal_are_added_from_stop_loss(tmp_path):
+    engine, broker = learned_engine(tmp_path)
+    magic = engine.cfg.trading.magic
+    bid, ask = broker.price("EURUSD")
+    ticket = broker.open_position("EURUSD", 1, 0.1, ask - 0.0050, ask + 0.0100, magic)
+    engine.tick()
+    j = engine._journal[str(ticket)]
+    info = broker.symbol_info("EURUSD")
+    p = broker.positions(magic)[0]
+    assert j["risk"] == pytest.approx(abs(p.open_price - p.sl) * info.tick_value / info.tick_size * 0.1)
+    assert j["expected_r"] == 0.2
+
+
 def test_research_picks_take_profit_by_dev_only():
     from gcmbot.research import evaluate_symbol
     df = FakeBroker(bar_seconds=None, history_bars=3000).rates("EURUSD", "H1", 3000)
@@ -621,6 +683,11 @@ def test_api_crypto():
     r = TestClient(create_app(engine, crypto=up)).get("/api/crypto", headers=H)
     assert [c["id"] for c in r.json()["coins"]] == ["bitcoin", "ethereum", "cardano"]
     assert TestClient(create_app(engine, crypto=up)).get("/api/crypto").status_code == 401
+
+
+def test_api_scorecard(client):
+    r = client.get("/api/scorecard", headers=H)
+    assert r.status_code == 200 and r.json()["verdict"] == "none"
 
 
 def test_api_learning_endpoints(client):

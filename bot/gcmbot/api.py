@@ -107,6 +107,10 @@ def create_app(engine: Engine, web_dir: Path | None = None, crypto: CryptoPrices
     def history(days: int = 30):
         return engine.broker.history(engine.cfg.trading.magic, days)
 
+    @app.get("/api/scorecard", dependencies=api)
+    def scorecard():
+        return engine.scorecard()
+
     @app.get("/api/events", dependencies=api)
     def events(limit: int = 100):
         return list(engine.events)[:limit]

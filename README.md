@@ -161,6 +161,12 @@ Paneldeki **Öğrenen bot** anahtarı açılınca bot elle seçilen strateji yer
 5. Öğrenme `learning.every_days` günde bir (varsayılan 7) kendiliğinden tekrarlanır;
    *Şimdi öğren* ile elle de başlatılabilir.
 
+**Demo karnesi** (Panel): bot her işlemi açarken riskini ve öğrenmedeki saklı test beklentisini
+`bot\journal.json`'a yazar. Kart, kapanan işlemlerin toplam sonucunu (R) beklenen aralıkla
+(beklenen ± 2 standart sapma) ve hiç üstünlük yokken beklenecek şans aralığıyla karşılaştırır.
+"Beklentinin altında" çıkarsa stratejiler canlıda testteki gibi çalışmıyor demektir. Kart ayrıca
+sonucu şanstan ayırt etmek için yaklaşık kaç işlem gerektiğini gösterir.
+
 Aynı işlemler komut satırından da yapılabilir:
 
 ```bat

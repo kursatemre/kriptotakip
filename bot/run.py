@@ -81,7 +81,8 @@ def serve(args):
 
     engine = Engine(cfg, broker, on_config_change=lambda c: save_config(c, args.config),
                     state_path=args.config.with_name("state.json"),
-                    learned_path=args.config.with_name("learned.json"))
+                    learned_path=args.config.with_name("learned.json"),
+                    journal_path=args.config.with_name("journal.json"))
     engine.start_thread()
     engine.event("info", f"Sunucu başladı ({broker.name}, {kind}). Bot durdurulmuş halde, uygulamadan başlatın.")
 

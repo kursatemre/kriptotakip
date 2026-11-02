@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../widgets.dart';
 import 'learning_card.dart';
+import 'scorecard_card.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key, required this.api});
@@ -16,6 +17,8 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   Map<String, dynamic>? _status;
+  Map<String, dynamic>? _scorecard;
+  DateTime? _scorecardAt;
   Object? _error;
   bool _busy = false;
   Timer? _timer;
@@ -41,6 +44,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _status = s;
           _error = null;
         });
+      }
+      // Karne işlem geçmişini okur; her 5 saniyede bir gerekmez
+      final at = _scorecardAt;
+      if (at == null || DateTime.now().difference(at) > const Duration(minutes: 1)) {
+        _scorecardAt = DateTime.now();
+        try {
+          final c = await widget.api.scorecard();
+          if (mounted) setState(() => _scorecard = c);
+        } catch (_) {
+          // Karne alınamadı (ör. işlem geçmişi okunamadı): panelin geri kalanı çalışmaya devam eder
+        }
       }
     } catch (e) {
       if (mounted) setState(() => _error = e);
@@ -207,6 +221,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             riskPct: (s['risk'] as Map<String, dynamic>)['risk_per_trade_pct'] as num,
             busy: _busy,
             onStrict: _setStrict, onToggle: _setLearning, onLearn: _learnNow),
+        if (_scorecard != null) ScorecardCard(card: _scorecard!, currency: cur),
         SectionCard(
           title: 'Hesap',
           trailing: Chip(label: Text(acc['is_demo'] == true ? 'DEMO' : 'GERÇEK')),
